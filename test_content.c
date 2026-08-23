@@ -2,6 +2,34 @@
 #include <locale.h>
 
 int main(void) {
+
+    setlocale(LC_ALL, "");
+    int r = term_set_raw(stdin, stdout);
+//    printf("r: %i\r\n", r);
+    str_t buf = { .s = NULL, .len = 0, .size = 0 };
+    content_t t = content_create();
+    char *s = "123456789101112131415161718192021222324252627282930\n\n123456789101112131415161718192021222324252627282930123456789101112131415161718192021222324252627282930123456789101112131415161718192021222324252627282930\xF0\x9F\x98\x80";
+    content_change(&t, 0, s, strlen(s));
+    while(t.error == 0) {
+        content_wait_in(&t);
+        break;
+    }
+    term_unset_raw(stdin, stdout);
+    /*
+    //term_set_raw(stdin);
+    int w, h;
+    wchar_t high_surrogate;
+    str_t s = { .s = NULL, .len = 0, .size = 0 };
+    for(;;) {
+        s.len = 0;
+        int r = term_wait_resize_or_in(stdin, &s, &w, &h, &high_surrogate);
+        printf("r: %i\r\n", r);
+        if(r > 0) {
+            printf("s:");
+            for(int i = 0; i < s.len; i ++) printf(" %i", (int)s.s[i]);
+            printf("\r\n");
+        }
+    }
     setlocale(LC_ALL, "");
     errno = 0;
     term_set_raw(stdin);
@@ -30,6 +58,7 @@ int main(void) {
             data_pending(t.in);
         }
     }
+    */
     return 0;
 }
 
