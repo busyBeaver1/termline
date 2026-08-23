@@ -16,8 +16,9 @@
 #include <sys/select.h> // for pselect for waiting for SIGWINCH why watching a file
 #include <termios.h> // for setting raw mode
 #include <signal.h> // for receiving SIGWINCH on window resize
-# include <bits/sigaction.h>
 #include <fcntl.h> // for testing if there is data on stdin
+#include <sys/ioctl.h>
+#include <time.h>
 
 bool _default_ts_set = false;
 struct termios _default_ts;
@@ -32,7 +33,6 @@ int term_set_raw(FILE *in) {
         _default_ts_set = true;
         _default_ts = ts;
     }
-    //cfmakeraw(&ts); // todo: replace with manual flag manipulation
     ts.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
     ts.c_oflag &= ~OPOST;
     ts.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
@@ -52,7 +52,7 @@ int term_unset_raw(FILE *in) {
 #define TERM_CURSOR_HIDE       "\e[?25l"
 #define TERM_CURSOR_SHOW       "\e[?25h"
 #define TERM_REQUEST_CURSOR    "\e[6n"
-#define TERM_REQUEST_SIZE      "\e[19t"
+//#define TERM_REQUEST_SIZE      "\e[19t"
 #define TERM_CURSOR_TO         "\e[%i;%iH"
 #define TERM_CURSOR_RIGHT      "\e[%iC"
 #define TERM_CURSOR_LEFT       "\e[%iD"
@@ -193,9 +193,9 @@ int term_wait_resize_or_in(FILE *in) {
 // sets errno to ENODATA on EOF from input and to ETIMEDOUT if answer is not received in 64 attempts
 // return { .x = -1, .y = -1 } on any error
 // if input_buf != NULL, all data from `in` except for the responce is appended to input_buf
-pos_t term_get_pos(FILE *out, FILE *in, str_t *input_buf) {
-    if(fprintf(out, TERM_REQUEST_CURSOR) < 0) goto err_ret;
-    if(fflush(out) < 0) goto err_ret;
+pos_t term_read_pos(FILE *out, FILE *in, str_t *input_buf) {
+//    if(fprintf(out, TERM_REQUEST_CURSOR) < 0) goto err_ret;
+//    if(fflush(out) < 0) goto err_ret;
     // report format: "\e[{Y};{X}R"
     for(int i = 0; i < 64; i ++) {
         char buf[128];
@@ -226,64 +226,18 @@ pos_t term_get_pos(FILE *out, FILE *in, str_t *input_buf) {
     return (pos_t){ .x = -1, .y = -1 };
 }
 
-pos_t term_get_size(FILE *out, FILE *in, str_t *input_buf) {
-    if(fprintf(out, TERM_REQUEST_SIZE) < 0) goto err_ret;
-    if(fflush(out) < 0) goto err_ret;
-    // report format: "\e[9;{height};{width}t"
-    for(int i = 0; i < 64; i ++) {
-        char buf[128];
-        int bytes_read = 0;
-        int c;
-        while((c = fgetc(in)) != EOF) {
-            buf[bytes_read ++] = (char)c;
-            if(bytes_read >= sizeof buf) goto err;
-            if(bytes_read == 1 && c != '\e') goto err;
-            if(bytes_read == 2 && c != '[') goto err;
-            if(bytes_read == 3 && c != '9') goto err;
-            if(bytes_read == 4 && c != ';') goto err;
-            if(c == 't') goto ok;
-        }
-        if(c == EOF) goto nodata;
-        ok:
-        pos_t p;
-        char *sep = parse_uint(buf + 4, &p.y);
-        if(sep == buf + 4 || *sep != ';') goto err;
-        char *end = parse_uint(sep + 1, &p.x);
-        if(end - buf != bytes_read - 1) goto err;
-        if(p.x < 0 || p.y < 0) exit(22);
-        return p;
-        err:
-        if(input_buf) str_append(input_buf, buf, bytes_read);
-    }
-    errno = ETIMEDOUT;
-    goto err_ret;
-    nodata: errno = ENODATA;
-    err_ret:
-    return (pos_t){ .x = -1, .y = -1 };
+pos_t term_get_pos(FILE *out, FILE *in, str_t *input_buf) {
+    if(fprintf(out, TERM_REQUEST_CURSOR) < 0) return (pos_t){ .x = -1, .y = -1 };
+    if(fflush(out) < 0) return (pos_t){ .x = -1, .y = -1 };
+    return term_read_pos(out, in, input_buf);
 }
 
-int term_test_19t_support(FILE *out, FILE *in, str_t *input_buf) {
-    if(fprintf(out, TERM_REQUEST_SIZE TERM_REQUEST_CURSOR) < 0) return -1;
-    if(fflush(out) < 0) return -1;
-    bool sup = false;
-    int in_escape = 0;
-    for(int i = 0; i < 128; i ++) {
-        int c = fgetc(in);
-        if(c == EOF) return -1;
-        if(in_escape == 1 && c != '[') in_escape = 0;
-        if(c == '\e') in_escape = 1;
-        else if(in_escape) in_escape ++;
-        if(in_escape >= 3 && 0x40 <= c && c <= 0x7E) {
-            if(c == 't') { sup = true; in_escape = 0; }
-            else if(c == 'R') return sup;
-            else return -c;
-        }
-        if(!in_escape && input_buf) {
-            str_stretch(input_buf, input_buf->len + 1);
-            input_buf->s[input_buf->len ++] = c;
-        }
-    }
-    return -3;
+int term_get_size(FILE *in, int *width, int *height) {
+    struct winsize ws;
+    if(ioctl(fileno(in), TIOCGWINSZ, &ws) < 0) return -1;
+    *width = ws.ws_col;
+    *height = ws.ws_row;
+    return 0;
 }
 
 char *step_utf8_cp(char *s, int len, uint32_t *cp) {
@@ -464,7 +418,6 @@ typedef struct {
     bool split_wchars; // behaviour of the terminal when printing a 2-wide character such that it does not fit on a line
                        // `false` means the whole thing is printed on the next line, `true` means it gets split between lines
     str_t input_buf; // when checking cursor location, other data than the responce gets put here; also in content_wait_in
-    bool size_req_support;
     int cursor_byte; // where the cursor shall point to; in [0, len]; negative means hide cursor and put it anywhere
     int error; // gets set to CONT_ERR_* on an error; when non-zero, content is considered corrupted and all content_* funtions on it return immediately
 } content_t;
@@ -487,32 +440,17 @@ content_t content_create() {
         .error = 0,
         .cursor_byte = 0
     };
-    int r = term_test_19t_support(t.out, t.in, &t.input_buf);
-    if(r < 0) { t.error = CONT_ERR_TEST; return t; }
-    t.size_req_support = r;
-    pos_t p;
-    if(t.size_req_support) {
-        if(fprintf(t.out, "\r" TERM_CURSOR_SAVE) < 0)
-            { t.error = CONT_ERR_OUT; return t; }
-        p = term_get_size(t.out, t.in, &t.input_buf);
-        if(p.x < 0) { t.error = CONT_ERR_GETSIZE; return t; }
-    } else {
-        if(fprintf(t.out, "\r" TERM_CURSOR_SAVE TERM_CURSOR_HIDE "\e[9999;9999H") < 0)
-            { t.error = CONT_ERR_OUT; return t; }
-        p = term_get_pos(t.out, t.in, &t.input_buf);
-        if(p.x < 0) { t.error = CONT_ERR_GETPOS; return t; }
-        if(fprintf(t.out, TERM_CURSOR_RESTORE TERM_CURSOR_SHOW TERM_CLEAR_SCREEN_DOWN) < 0)
-            { t.error = CONT_ERR_OUT; return t; }
-    }
-    t.width = p.x;
-    t.height = p.y;
+    if(term_get_size(t.in, &t.width, &t.height) < 0)
+        { t.error = CONT_ERR_GETSIZE; return t; }
+    if(fprintf(t.out, "\r" TERM_CURSOR_SAVE) < 0)
+        { t.error = CONT_ERR_OUT; return t; }
     t.origin = term_get_pos(t.out, t.in, &t.input_buf).y;
-    //printf("\e[1;1H%i", t.origin);
-    //exit(0);
     if(t.origin < 0) t.error = CONT_ERR_GETPOS;
     if(setup_resize_watch() < 0) t.error = CONT_ERR_SETUP;
     return t;
 }
+
+int ii = 1;
 
 // render the content starting at byte `start`
 // refuses to write to terminal if a resize is pending (_winch flag)
@@ -549,6 +487,7 @@ void content_render_from(content_t *t, int start) {
         str_append_lit(&out, TERM_COLOR_RESET TERM_CURSOR_HIDE);
         str_printf(&out, TERM_CURSOR_TO, pos.y, pos.x);
     } else str_append_lit(&out, TERM_COLOR_RESET TERM_CURSOR_HIDE TERM_CURSOR_RESTORE "\r");
+    bool overflow = false;
     while(s < t->s + t->len) {
         s = step_item(s, (t->s + t->len) - s, &pos, t->width, t->split_wchars, &out, &cs, NULL);
         if(!got_cur && t->cursor_byte && s - t->s >= t->cursor_byte) { cur = pos; got_cur = true; }
@@ -585,29 +524,42 @@ void content_change(content_t *t, int start, char *cont, int len) {
     assert(len >= 0);
     t->len = start;
     str_append((str_t*)t, cont, len);
+    t->cursor_byte = len;
     content_render_from(t, start);
+}
+
+void sleep_ms(long milliseconds) {
+    struct timespec ts;
+    ts.tv_sec = milliseconds / 1000;
+    ts.tv_nsec = (milliseconds % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
 }
 
 // rerender the content assuming the terminal window has been resized
 void content_resize(content_t *t) {
     _winch = false;
     if(t->error) return;
-    if(fprintf(t->out, TERM_CURSOR_RESTORE) < 0)
-        { t->error = CONT_ERR_OUT; return; }
-    t->origin = term_get_pos(t->out, t->in, &t->input_buf).y;
-    if(t->origin < 0) { t->error = CONT_ERR_OUT; return; }
-    pos_t p;
-    if(t->size_req_support) {
-        p = term_get_size(t->out, t->in, &t->input_buf);
-        if(p.x < 0) { t->error = CONT_ERR_GETSIZE; return; }
-    } else {
-        if(fprintf(t->out, TERM_CURSOR_HIDE "\e[9999;9999H") < 0)
-            { t->error = CONT_ERR_OUT; return; }
-        p = term_get_pos(t->out, t->in, &t->input_buf);
+    if(term_get_size(t->in, &t->width, &t->height) < 0)
+        { t->error = CONT_ERR_GETSIZE; return; }
+    if(t->cursor_byte >= 0) {
+        // workflow:
+        // Save current cursor to `p`; then wait a little; if no winch happens; hide, restore origin, request pos, move cursor to `p`, show
+        // Only then see the responce for origin pos. This way in time when the cursor is hidden we don't wait for stdin and avoid flickering
+        pos_t p = term_get_pos(t->out, t->in, &t->input_buf);
         if(p.x < 0) { t->error = CONT_ERR_GETPOS; return; }
+        sleep_ms(1); // makes resizing more stable on gnome terminal (and probably other terminals with auto-rewrapping)
+        if(_winch) return;
+        if(fprintf(t->out, TERM_CURSOR_HIDE TERM_CURSOR_RESTORE TERM_REQUEST_CURSOR TERM_CURSOR_TO TERM_CURSOR_SHOW, p.y, p.x) < 0 || fflush(t->out) < 0)
+            { t->error = CONT_ERR_OUT; return; }
+        t->origin = term_read_pos(t->out, t->in, &t->input_buf).y;
+        if(t->origin < 0) { t->error = CONT_ERR_OUT; return; }
+    } else {
+        if(fprintf(t->out, TERM_CURSOR_RESTORE TERM_REQUEST_CURSOR) < 0 || fflush(t->out) < 0)
+            { t->error = CONT_ERR_OUT; return; }
+        t->origin = term_read_pos(t->out, t->in, &t->input_buf).y;
+        if(t->origin < 0) { t->error = CONT_ERR_OUT; return; }
+        sleep_ms(1); // makes resizing more stable on gnome terminal (and probably other terminals with auto-rewrapping)
     }
-    t->width = p.x;
-    t->height = p.y;
     content_render_from(t, 0);
 }
 
@@ -622,9 +574,7 @@ void content_wait_in(content_t *t) {
         r = term_wait_resize_or_in(t->in);
         //printf(TERM_CURSOR_TO "[%i]\r\n", 1, 1, ii ++);
         if(r < 0) { t->error = CONT_ERR_WAIT; return; }
-        if(r == 0) {
-            content_resize(t);
-        }
+        if(r == 0) content_resize(t);
     }
     if(read_avail(t->in, &t->input_buf) < 0) t->error = CONT_ERR_IN;
 }
