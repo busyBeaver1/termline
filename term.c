@@ -1,3 +1,13 @@
+/*
+ * Pefixes: term_*    - terminal-related utilities
+ *          tu_*      - general utilities
+ *          content_* - functions on content_t
+ *          tl_*      - functions on termline_t
+ *          KEY_*     - non-printable key representations
+ *          MOD_*     - key modifier bits (for CTRL/ALT/SHIFT/nompad)
+ *          LHREC_*   - inline history (for undo/redo) record types
+ */
+
 #define _XOPEN_SOURCE 700 // for wcwidth from wchar.h
 #define _POSIX_C_SOURCE 200112L // for pselect from sys/select.h
 
@@ -12,18 +22,18 @@
 #include <stdarg.h>
 #include <inttypes.h>
 
-#define _TERM_UNIX    1
-#define _TERM_WINDOWS 2
+#define TU_UNIX    1
+#define TU_WINDOWS 2
 
 #if defined _WIN32 || defined _WIN64
-#define _TERM_SYSTEM _TERM_WINDOWS
-#elif defined __unix__ ||| define __APPLE__
-#define _TERM_SYSTEM _TERM_UNIX
+#define TU_SYSTEM TU_WINDOWS
+#elif defined __unix__ || defined __APPLE__
+#define TU_SYSTEM TU_UNIX
 #else
 #error Unknown system
 #endif
 
-#if _TERM_SYSTEM == _TERM_UNIX
+#if TU_SYSTEM == TU_UNIX
 // POSIX:
 #include <sys/select.h> // for pselect for waiting for SIGWINCH why watching a file
 #include <termios.h> // for setting raw mode
@@ -35,60 +45,60 @@
 #include <windows.h>
 #endif
 
-bool _default_ts_set = false;
+bool tu_default_ts_set = false;
 
-#if _TERM_SYSTEM == _TERM_UNIX
-struct termios _default_ts;
+#if TU_SYSTEM == TU_UNIX
+struct termios tu_default_ts;
 
 // put terminal into raw mode
 // returns 0 on success, -1 on error
-int term_set_raw(FILE *in) {
+// unly `in` is used, `out` kept for compat. with windows version
+int term_set_raw(FILE *in, FILE *out) {
     int infd = fileno(in);
     if(infd < 0) return -1;
-    struct termios ts = _default_ts;
-    if(!_default_ts_set) {
-        int r = tcgetattr(infd, &ts);
-        if(r) return -1;
-        _default_ts_set = true;
-        _default_ts = ts;
+    struct termios ts = tu_default_ts;
+    if(!tu_default_ts_set) {
+        if(tcgetattr(infd, &ts)) return -1;
+        tu_default_ts_set = true;
+        tu_default_ts = ts;
     }
     ts.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
     ts.c_oflag &= ~OPOST;
     ts.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     ts.c_cflag &= ~(CSIZE | PARENB);
     ts.c_cflag |= CS8;
-    r = tcsetattr(infd, 0, &ts);
-    if(r) return -1;
+    if(tcsetattr(infd, 0, &ts)) return -1;
     return 0;
 }
 
-int term_unset_raw(FILE *in) {
-    if(!_default_ts_set) return -1;
-    return tcsetattr(fileno(in), 0, &_default_ts);
+// unly `in` is used, `out` kept for compat. with windows version
+int term_unset_raw(FILE *in, FILE *out) {
+    if(!tu_default_ts_set) return -1;
+    return tcsetattr(fileno(in), 0, &tu_default_ts);
 }
 #else
-DWORD _default_ts_in;
-DWORD _default_ts_out;
+DWORD tu_default_ts_in;
+DWORD tu_default_ts_out;
 
-HANDLE _file2handle(FILE *f) {
+HANDLE tu_file2handle(FILE *f) {
     int fd = _fileno(f);
     if(fd == -1) return INVALID_HANDLE_VALUE;
     return (HANDLE)(intptr_t)_get_osfhandle(fd);
 }
 
 int term_set_raw(FILE *in, FILE *out) {
-    HANDLE inhd = _file2handle(in);
+    HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return -1;
-    HANDLE outhd = _file2handle(out);
+    HANDLE outhd = tu_file2handle(out);
     if(outhd == INVALID_HANDLE_VALUE) return -1;
-    DWORD ints = _default_ts_in;
-    DWORD outts = _default_ts_out;
-    if(!_default_ts_set) {
+    DWORD ints = tu_default_ts_in;
+    DWORD outts = tu_default_ts_out;
+    if(!tu_default_ts_set) {
         if(!GetConsoleMode(inhd, &ints)) return -1;
         if(!GetConsoleMode(outhd, &outts)) return -1;
-        _default_ts_set = true;
-        _default_ts_in = ints;
-        _default_ts_out = outts;
+        tu_default_ts_set = true;
+        tu_default_ts_in = ints;
+        tu_default_ts_out = outts;
     }
     ints &= ~(ENABLE_ECHO_INPUT           | ENABLE_INSERT_MODE        | ENABLE_MOUSE_INPUT                 |
               ENABLE_PROCESSED_INPUT      | ENABLE_QUICK_EDIT_MODE);
@@ -101,13 +111,13 @@ int term_set_raw(FILE *in, FILE *out) {
 }
 
 int term_unset_raw(FILE *in, FILE *out) {
-    if(!_default_ts_set) return -1;
-    HANDLE inhd = _file2handle(in);
+    if(!tu_default_ts_set) return -1;
+    HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return -1;
-    HANDLE outhd = _file2handle(out);
+    HANDLE outhd = tu_file2handle(out);
     if(outhd == INVALID_HANDLE_VALUE) return -1;
-    if(!SetConsoleMode(inhd, _default_ts_in)) return -1;
-    if(!SetConsoleMode(outhd, _default_ts_out)) return -1;
+    if(!SetConsoleMode(inhd, tu_default_ts_in)) return -1;
+    if(!SetConsoleMode(outhd, tu_default_ts_out)) return -1;
     return 0;
 }
 #endif
@@ -122,8 +132,10 @@ int term_unset_raw(FILE *in, FILE *out) {
 #define TERM_CURSOR_RIGHT      "\033[%iC"
 #define TERM_CURSOR_LEFT       "\033[%iD"
 #define TERM_CLEAR_LINE_RIGHT  "\033[K"
+#define TERM_CLEAR_LINE_LEFT   "\033[1K"
 #define TERM_CLEAR_SCREEN_DOWN "\033[J"
 #define TERM_COLOR_RESET       "\033[0m"
+#define TERM_COLOR_UNDERLINE   "\033[4m"
 #define TERM_COLOR_INVERSE     "\033[7m"
 #define TERM_COLOR_UNINVERSE   "\033[27m"
 #define TERM_CURSOR_NEWLINE    "\033[B\033[G" // does not push line unlike \r\n
@@ -140,6 +152,27 @@ char *parse_uint(char *s, int *x) {
     return s;
 }
 
+#define tu_implement_arr(prefix, type)                       \
+typedef struct { type *p; int len, size; } prefix##_t;       \
+                                                             \
+void prefix##_stretch(prefix##_t *arr, int size) {           \
+    if(arr->size >= size) return;                            \
+    if(arr->size <= 0) arr->size = 64;                       \
+    while(arr->size < size) arr->size *= 2;                  \
+    type *new_p = malloc(arr->size * sizeof(type));          \
+    if(arr->p) {                                             \
+        memcpy(new_p, arr->p, arr->len * sizeof(type));      \
+        free(arr->p);                                        \
+    }                                                        \
+    arr->p = new_p;                                          \
+}                                                            \
+                                                             \
+void prefix##_append(prefix##_t *arr, type *cont, int len) { \
+    prefix##_stretch(arr, arr->len + len);                   \
+    memcpy(arr->p + arr->len, cont, len * sizeof(type));     \
+    arr->len += len;                                         \
+}
+
 typedef struct {
     int x, y; // 1-based, top->botom, left->right
     bool bouta_wrap; // set to true when the cursor is in right-most column and
@@ -152,13 +185,17 @@ typedef struct {
     int len, size;
 } str_t;
 
+tu_implement_arr(str_arr, str_t)
+
 void str_stretch(str_t *s, int size) {
     if(s->size >= size) return;
-    if(s->size <= 0) s->size = 1;
+    if(s->size <= 0) s->size = 64;
     while(s->size < size) s->size *= 2;
     char *new_s = malloc(s->size);
-    memcpy(new_s, s->s, s->len);
-    free(s->s);
+    if(s->s) {
+        memcpy(new_s, s->s, s->len);
+        free(s->s);
+    }
     s->s = new_s;
 }
 
@@ -182,24 +219,42 @@ void str_append(str_t *dst, const char *s, int len) {
     dst->len += len;
 }
 
+// allows out of bounds, returns a view that can be turned into a self-allocated string with str_sovereign
+str_t str_substr(str_t *s, int at, int len) {
+    if(at + len < 0 || at > s->len) return (str_t){ NULL };
+    if(at < 0) { len += at; at = 0; }
+    if(at + len >= s->len) len = s->len - at;
+    return (str_t){ .s = s->s + at, .len = len, .size = 0 };
+}
+
+void str_sovereign(str_t *s) {
+    if(s->len == 0) { s->size = 0; s->s = NULL; return; }
+    s->size = 64;
+    while(s->size < s->len) s->size *= 2;
+    char *new_s = malloc(s->size);
+    memcpy(new_s, s->s, s->len);
+    s->s = new_s;
+}
+
 #define str_append_lit(dst, s_literal) str_append(dst, s_literal, sizeof(s_literal) - 1)
 
-volatile bool _winch = false;
+volatile bool tu_winch = false;
 
-#if _TERM_SYSTEM == _TERM_WINDOWS
+#if TU_SYSTEM == TU_WINDOWS
+// only `out` is used, `in` kept for compat. with unix version
 int term_get_size(FILE *in, FILE *out, int *width, int *height) {
     int outfd = _fileno(out);
-    if(outfd == -1) { printf("1\r\n"); return -1; }
+    if(outfd == -1) return -1;
     HANDLE outhd = (HANDLE)(intptr_t)_get_osfhandle(outfd);
-    if(outhd == INVALID_HANDLE_VALUE) { printf("2\r\n"); return -1; }
+    if(outhd == INVALID_HANDLE_VALUE) return -1;
     CONSOLE_SCREEN_BUFFER_INFO info;
-    if(!GetConsoleScreenBufferInfo(outhd, &info)) { printf("3\r\n"); return -1; }
+    if(!GetConsoleScreenBufferInfo(outhd, &info)) return -1;
     if(width) *width = info.dwSize.X;
     if(height) *height = info.dwSize.Y;
-    //printf("ok\r\n");
     return 0;
 }
 #else
+// only `in` is used, `out` kept for compat. with windows version
 int term_get_size(FILE *in, FILE *out, int *width, int *height) {
     struct winsize ws;
     if(ioctl(fileno(in), TIOCGWINSZ, &ws) < 0) return -1;
@@ -209,17 +264,17 @@ int term_get_size(FILE *in, FILE *out, int *width, int *height) {
 }
 #endif
 
-#if _TERM_SYSTEM == _TERM_UNIX
+#if TU_SYSTEM == TU_UNIX
 
 int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
-    if(!_winch) return 0;
-    _winch = false;
+    if(!tu_winch) return 0;
+    tu_winch = false;
     if(term_get_size(in, out, w, h) < 0) return -1;
     return 1;
 }
 
-void _winch_handler(int) {
-    _winch = true;
+void tu_winch_handler(int) {
+    tu_winch = true;
 }
 
 // necessery prep to call term_wait_resize_or_in
@@ -229,7 +284,7 @@ int setup_resize_watch() {
     //sigaddset(&mask, SIGWINCH);
     //if(sigprocmask(SIG_BLOCK, &mask, NULL) < 0) return -1; // block SIGWINCH not to lose it when not running term_wait_resize_or_in
     struct sigaction sa = {
-        .sa_handler = _winch_handler,
+        .sa_handler = tu_winch_handler,
         .sa_flags = SA_RESTART
     };
     sigemptyset(&sa.sa_mask);
@@ -250,7 +305,7 @@ int _data_pending(FILE *in) {
 }
 */
 
-int _read_avail(FILE *in, str_t *dst) {
+int tu_read_avail(FILE *in, str_t *dst) {
     int infd = fileno(in);
     int options = fcntl(infd, F_GETFL);
     if(options < 0) return -1;
@@ -264,46 +319,49 @@ int _read_avail(FILE *in, str_t *dst) {
     return N;
 }
 
-struct timespec _ms2ts(unsigned long t) {
+struct timespec tu_ms2ts(unsigned long t) {
     return (struct timespec){
         .tv_sec = t / 1000,
         .tv_nsec = (t % 1000) * 1000000
     };
 }
 
-int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout) {
-    int rb = _read_avail(in, input_buf);
+int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, int *width, int *height) {
+    int rb = tu_read_avail(in, input_buf);
     if(rb) return 0;
     int infd = fileno(in);
     sigset_t mask;
     if(sigprocmask(SIG_BLOCK, NULL, &mask) < 0) return -1; // read current mask
     sigdelset(&mask, SIGWINCH); // not block SIGWINCH
-    while(!_winch) {
+    while(!tu_winch) {
         fd_set fs, fse;
         FD_ZERO(&fs);      FD_ZERO(&fse);
         FD_SET(infd, &fs); FD_SET(infd, &fse);
-        int _errno = errno;
-        struct timespec ts = _ms2ts(timeout);
+        struct timespec ts = tu_ms2ts(timeout);
+        int _errno = errno; errno = 0;
         int r = pselect(infd + 1, &fs, NULL, &fse, timeout >= 0 ? &ts : NULL, &mask); // wait for any change on `in` with `mask` as temporary signal mask
+        int e = errno; errno = _errno;
+        if(r == 0) return 0;
         if(r == 1 && FD_ISSET(infd, &fs) && !FD_ISSET(infd, &fse)) {
-            int rb = _read_avail(in, input_buf);
+            int rb = tu_read_avail(in, input_buf);
             return rb == 0 ? -1 : 0;
         }
-        if(r == -1 && errno == EINTR) { errno = _errno; continue; }
+        if(r == -1 && e == EINTR) continue;
         return -1;
     }
-    _winch = false;
+    tu_winch = false;
+    term_get_size(in, NULL, width, height);
     return 1;
 }
 
-int _gets(FILE *in, char *dst)  {
+int tu_gets(FILE *in, char *dst)  {
     int c = fgetc(in);
     if(c == EOF) return 0;
     *dst = (char)c;
     return 1;
 }
 
-int _fwrite_utf8(char *s, int len, FILE *out) {
+int tu_fwrite_utf8(char *s, int len, FILE *out) {
     return fwrite(s, 1, len, out);
 }
 
@@ -329,7 +387,7 @@ void wstr_push(wstr_t *s, wchar_t c) {
     s->s[s->len ++] = c;
 }
 
-int _encode_wchars(str_t *dst, wchar_t *s, int len) {
+int tu_encode_wchars(str_t *dst, wchar_t *s, int len) {
     if(len == 0) return 0;
     int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
     if(n == 0) return -1;
@@ -341,7 +399,7 @@ int _encode_wchars(str_t *dst, wchar_t *s, int len) {
 }
 
 int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, int *w, int *h, wchar_t *high_surrogate) {
-    HANDLE inhd = _file2handle(in);
+    HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return -1;
     bool got_resize = false;
     for(;;) {
@@ -364,13 +422,11 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, in
                 COORD cd = irs[i].Event.WindowBufferSizeEvent.dwSize;
                 if(w) *w = cd.X;
                 if(h) *h = cd.Y;
-                //printf("%i %i\r\n", p->y, p->x);
             } else if(irs[i].EventType == KEY_EVENT) {
                 KEY_EVENT_RECORD ke = irs[i].Event.KeyEvent;
                 if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) continue;
                 for(int j = 0; j < ke.wRepeatCount; j ++)
                     wstr_push(&s, ke.uChar.UnicodeChar);
-                //printf("%i %i %i\r\n", (int)ke.uChar.UnicodeChar, (int)ke.bKeyDown, (int)ke.wRepeatCount);
             }
         }
         if(high_surrogate) {
@@ -378,7 +434,7 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, in
                 *high_surrogate = s.s[-- s.len];
             else *high_surrogate = 0;
         }
-        if(input_buf && _encode_wchars(input_buf, s.s, s.len) < 0) goto err;
+        if(input_buf && tu_encode_wchars(input_buf, s.s, s.len) < 0) goto err;
         bool err = false;
         if(0) { err: err = true; }
         free(s.s); free(irs);
@@ -396,8 +452,8 @@ int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
     return r;
 }
 
-int _gets(FILE *in, char *dst) {
-    HANDLE inhd = _file2handle(in);
+int tu_gets(FILE *in, char *dst) {
+    HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return 0;
     wchar_t ws[2];
     INPUT_RECORD ir1, ir2;
@@ -425,9 +481,9 @@ int _gets(FILE *in, char *dst) {
     return WideCharToMultiByte(CP_UTF8, 0, ws, N, dst, 8, NULL, NULL);
 }
 
-int _fwrite_utf8(char *s, int len, FILE *out) {
+int tu_fwrite_utf8(char *s, int len, FILE *out) {
     if(len == 0) return 0;
-    HANDLE outhd = _file2handle(out);
+    HANDLE outhd = tu_file2handle(out);
     if(outhd == INVALID_HANDLE_VALUE) return -1;
     int n = MultiByteToWideChar(CP_UTF8, 0, s, len, NULL, 0);
     if(n == 0) return -1;
@@ -449,19 +505,23 @@ pos_t term_read_pos(FILE *out, FILE *in, str_t *input_buf) {
 //    if(fprintf(out, TERM_REQUEST_CURSOR) < 0) goto err_ret;
 //    if(fflush(out) < 0) goto err_ret;
     // report format: "\e[{Y};{X}R"
+    char buf[128];
+    int bytes_read = 0;
     for(int i = 0; i < 64; i ++) {
-        char buf[128];
-        int bytes_read = 0;
-        //printf("==\r\n");
         int k;
-        while(k = _gets(in, buf + bytes_read)) {
+        while(k = tu_gets(in, buf + bytes_read)) {
             bytes_read += k;
             for(int j = bytes_read - k; j < bytes_read; j ++) {
-                //printf("%i\r\n", buf[j]);
-                if(j >= sizeof buf) goto err;
-                if(j == 0 && buf[j] != '\033') goto err;
-                if(j == 1 && buf[j] != '[') goto err;
-                if(buf[j] == 'R') goto ok;
+                if(j >= 2 && buf[j] == 'R') goto ok;
+                if(j >= sizeof buf - 8 || 
+                   j == 0 && buf[j] != '\033' ||
+                   j == 1 && buf[j] != '[' ||
+                   j >= 2 && (buf[j] < '0' || buf[j] > '9') && buf[j] != ';') {
+                    if(input_buf) str_append(input_buf, buf, j);
+                    memmove(buf, buf + j, bytes_read - j);
+                    bytes_read -= j;
+                    goto err;
+                }
             }
         }
         if(k == 0) goto nodata;
@@ -472,9 +532,9 @@ pos_t term_read_pos(FILE *out, FILE *in, str_t *input_buf) {
         char *end = parse_uint(sep + 1, &p.x);
         if(end - buf != bytes_read - 1) goto err;
         return p;
-        err:
-        if(input_buf) str_append(input_buf, buf, bytes_read);
+        err:;
     }
+    if(input_buf) str_append(input_buf, buf, bytes_read);
     errno = ETIMEDOUT;
     goto err_ret;
     nodata: errno = ENODATA;
@@ -488,44 +548,73 @@ pos_t term_get_pos(FILE *out, FILE *in, str_t *input_buf) {
     return term_read_pos(out, in, input_buf);
 }
 
-char *step_utf8_cp(char *s, int len, uint32_t *cp) {
+char *step_utf8_cp(char *_s, int len, uint32_t *cp) {
+    unsigned char *s = (unsigned char*)_s;
     if((*s & 0x80) == 0) {
         if(cp) *cp = (uint32_t)(*s & 0x7F);
-        return s + 1;
+        return _s + 1;
     }
     if((*s & 0xE0) == 0xC0) {
-        if(2 > len) return s;
-        if((s[1] & 0xC0) != 0x80) return s;
-        if((uint8_t)*s < 0xC2) return s; // overlongs
-        if(cp) *cp = (uint32_t)(*s & 0x7F) << 6 |
+        if(2 > len) return _s;
+        if((s[1] & 0xC0) != 0x80) return _s;
+        if(*s < 0xC2) return _s; // overlongs
+        if(cp) *cp = (uint32_t)(*s & 0x3F) << 6 |
                      (uint32_t)(s[1] & 0x3F);
-        return s + 2;
+        return _s + 2;
     }
     if((*s & 0xF0) == 0xE0) {
-        if(3 > len) return s;
+        if(3 > len) return _s;
         if((s[1] & 0xC0) != 0x80 ||
-           (s[2] & 0xC0) != 0x80) return s;
-        if(*s == 0xE0 && (uint8_t)s[1] < 0xA0) return s; // overlongs
-        if(*s == 0xED && (uint8_t)s[1] >= 0xA0) return s; // UTF-16 surrogates
-        if(cp) *cp = (uint32_t)(*s & 0x7F) << 12 |
+           (s[2] & 0xC0) != 0x80) return _s;
+        if(*s == 0xE0 && s[1] < 0xA0) return _s; // overlongs
+        if(*s == 0xED && s[1] >= 0xA0) return _s; // UTF-16 surrogates
+        if(cp) *cp = (uint32_t)(*s & 0x1F) << 12 |
                      (uint32_t)(s[1] & 0x3F) << 6 |
                      (uint32_t)(s[2] & 0x3F);
-        return s + 3;
+        return _s + 3;
     }
     if((*s & 0xF8) == 0xF0) {
-        if(4 > len) return s;
+        if(4 > len) return _s;
         if((s[1] & 0xC0) != 0x80 ||
            (s[2] & 0xC0) != 0x80 ||
-           (s[3] & 0xC0) != 0x80) return s;
-        if(*s == 0xF0 && (uint8_t)s[1] < 0x90) return s; // overlongs
-        if((uint8_t)*s > 0xF4 || (*s == 0xF4 && (uint8_t)s[1] > 0x8F)) return s; // U+10FFFF limit
-        if(cp) *cp = (uint32_t)(*s & 0x7F) << 18 |
+           (s[3] & 0xC0) != 0x80) return _s;
+        if(*s == 0xF0 && s[1] < 0x90) return _s; // overlongs
+        if(*s > 0xF4 || (*s == 0xF4 && s[1] > 0x8F)) return _s; // U+10FFFF limit
+        if(cp) *cp = (uint32_t)(*s & 0x0F) << 18 |
                      (uint32_t)(s[1] & 0x3F) << 12 |
                      (uint32_t)(s[2] & 0x3F) << 6 |
                      (uint32_t)(s[3] & 0x3F);
-        return s + 4;
+        return _s + 4;
     }
-    return s;
+    return _s;
+}
+
+char *step_utf8_cp_partial(char *_s, int len, uint32_t *cp) {
+    unsigned char *s = (unsigned char*)_s;
+    char template[4] = "\x00\x80\x80\x80";
+    if(*s == 0xE0) template[1] = 0xA0;
+    if(*s == 0xF0) template[1] = 0x90;
+    memcpy(template, _s, len > 4 ? 4 : len);
+//    printf("\r\n%i {%s} %i %i %i\r\n", len, template, template[0], template[1], step_utf8_cp(template, len, cp) - template);
+    return step_utf8_cp(template, 4, cp) - template + _s;
+}
+
+char *write_utf8_cp(char *dst, uint32_t c) {
+    assert(c < 0x110000);
+    if(c < 0x80) {
+        *dst = (char)c;
+        return dst + 1;
+    }
+    if(c < 0x800) {
+        *dst = 0xC0 | c >> 6; dst[1] = 0x80 | c & 0x3F;
+        return dst + 2;
+    }
+    if(c < 0x10000) {
+        *dst = 0xE0 | c >> 12; dst[1] = 0x80 | c >> 6 & 0x3F; dst[2] = 0x80 | c & 0x3F;
+        return dst + 3;
+    }
+    *dst = 0xF0 | c >> 24; dst[1] = 0x80 | c >> 12 & 0x3F; dst[2] = 0x80 | c >> 6 & 0x3F; dst[3] = 0x80 | c & 0x3F;
+    return dst + 4;
 }
 
 // cursor in a content, described in various ways
@@ -533,12 +622,205 @@ typedef struct {
     int byte; // byte number in the content's text, `byte` \in [0, t->len]
     int row; // logical row (i.e. not accounting for line wrap), 0-based
     int col; // logical column (i.e. not accounting for line wrap), 0-based
-    int chr; // number of visible items (width > 0) or tabs (\t, counted even when invisible) that are to the left of the cursor in a logical line
+    int cp; // number of visible items (width > 0) or tabs (\t, counted even when invisible) that are to the left of the cursor in a logical line
+    int row_byte;
 } cursor_t;
 
-#if _TERM_SYSTEM == _TERM_WINDOWS
+int tu_binary_search(const uint32_t *indices, int len, uint32_t c) {
+    int l = 0;
+    int u = len - 1;
+    if(indices[u] <= c) return u;
+    while(u - l > 1) {
+        int m = (u + l) / 2;
+        if(indices[m] <= c) l = m;
+        else u = m;
+    }
+    return l;
+}
+
+// copying python's builtin .upper and .lower
+const uint32_t tu_lower_indices_even[] = {
+0,66,92,192,224,256,304,306,312,330,376,378,386,390,392,394,396,398,400,402,404,406,408,410,412,414,416,422,424,428,430,
+432,434,436,440,442,444,446,452,454,456,458,460,478,496,498,502,504,544,546,564,570,572,574,576,580,582,592,880,884,886,
+888,902,904,908,910,912,914,930,932,940,984,1008,1012,1014,1018,1020,1022,1024,1040,1072,1120,1154,1162,1216,1218,1232,
+1328,1330,1368,4256,4294,5024,5104,5110,7312,7356,7358,7360,7680,7830,7838,7840,7936,7944,7952,7960,7966,7976,7984,7992,
+8000,8008,8014,8040,8048,8072,8080,8088,8096,8104,8112,8120,8122,8124,8126,8136,8140,8142,8152,8154,8156,8168,8170,8172,
+8174,8184,8186,8188,8190,8486,8488,8490,8492,8498,8500,8544,8560,9398,9424,11264,11312,11360,11362,11364,11366,11374,
+11376,11378,11380,11390,11392,11492,11506,11508,42560,42606,42624,42652,42786,42800,42802,42864,42878,42888,42896,42900,
+42902,42922,42924,42926,42928,42930,42932,42948,42950,42952,42956,42958,42960,42962,42966,42972,42974,65314,65340,66560,
+66600,66736,66772,66928,66966,68736,68788,68944,68966,71840,71872,93760,93792,125184,125218
+};
+const int tu_lower_shifts_even[] = {
+0,32,0,32,0,1,0,1,0,1,-121,0,1,206,0,205,0,79,203,0,207,211,1,0,211,0,1,218,0,1,218,0,217,0,1,0,1,0,2,0,1,2,0,1,0,1,-97,
+1,-130,1,0,10795,0,10792,0,69,1,0,1,0,1,0,38,37,64,63,0,32,0,32,0,1,0,-60,0,1,0,-130,80,32,0,1,0,1,15,0,1,0,48,0,7264,0,
+38864,8,0,-3008,0,-3008,0,1,0,-7615,1,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,-74,-9,0,-86,-9,0,-8,-100,0,-8,
+-112,-7,0,-128,-126,-9,0,-7517,0,-8383,0,28,0,16,0,26,0,48,0,1,-10743,-10727,0,-10749,-10782,1,0,-10815,1,0,1,0,1,0,1,0,
+1,0,1,0,1,0,1,0,1,-42308,-42315,-42308,-42258,-42261,1,-48,-35384,0,1,0,1,0,1,-42561,0,32,0,40,0,40,0,39,0,64,0,32,0,32,
+0,32,0,34,0
+};
+const uint32_t tu_lower_indices_odd[] = {
+1,65,91,193,215,217,223,313,329,377,383,385,387,391,393,395,397,399,401,403,405,407,409,413,415,417,423,425,427,431,433,
+435,439,441,453,455,457,459,477,497,499,503,505,571,573,575,577,579,581,583,895,897,905,907,911,913,941,975,977,1015,
+1017,1019,1021,1025,1041,1073,1217,1231,1329,1367,4257,4297,4301,4303,5025,5105,5111,7305,7307,7313,7355,7357,7361,7945,
+7953,7961,7967,7977,7985,7993,8001,8009,8015,8025,8033,8041,8049,8073,8081,8089,8097,8105,8113,8121,8123,8125,8137,8141,
+8153,8155,8157,8169,8171,8173,8185,8187,8189,8491,8493,8545,8561,8579,8581,9399,9425,11265,11313,11363,11365,11367,
+11373,11375,11377,11381,11383,11391,11393,11499,11503,42873,42877,42879,42891,42893,42895,42923,42925,42927,42929,42931,
+42933,42949,42951,42955,42957,42997,42999,65313,65339,66561,66601,66737,66773,66929,66939,66941,66955,66957,66963,66965,
+66967,68737,68787,68945,68967,71841,71873,93761,93793,125185,125219
+};
+const int tu_lower_shifts_odd[] = {
+0,32,0,32,0,32,0,1,0,1,0,210,0,1,205,1,0,202,1,205,0,209,0,213,214,0,1,218,0,1,217,1,219,0,1,2,0,1,0,2,0,-56,0,1,-163,0,
+1,-195,71,0,116,0,37,0,63,32,0,8,0,1,-7,0,-130,80,32,0,1,0,48,0,7264,0,7264,0,38864,8,0,1,0,-3008,0,-3008,0,-8,0,-8,0,
+-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,0,-8,-74,0,-86,0,-8,-100,0,-8,-112,0,-128,-126,0,-8262,0,16,0,1,0,26,0,48,0,-3814,
+0,1,-10780,-10783,0,1,0,-10815,0,1,0,1,-35332,0,1,-42280,0,-42319,-42305,0,-42282,928,0,-42307,1,-42343,0,1,0,32,0,40,0,
+40,0,39,0,39,0,39,0,39,0,64,0,32,0,32,0,32,0,34,0
+};
+const uint32_t tu_upper_indices_even[] = {
+0,98,124,224,256,314,330,378,384,386,392,394,396,398,402,404,410,412,414,416,424,426,432,434,436,440,454,456,458,460,
+462,478,498,500,572,574,576,578,580,592,594,596,598,600,604,606,608,610,612,614,616,618,620,622,626,628,640,642,644,648,
+650,652,654,658,660,670,672,892,894,940,942,944,946,962,964,972,974,976,978,982,984,1008,1010,1012,1016,1018,1072,1104,
+1120,1218,1232,1378,1416,4304,4348,4350,4352,5112,5118,7296,7298,7300,7302,7304,7306,7308,7566,7568,7936,7944,7952,7958,
+7968,7976,7984,7992,8000,8006,8032,8040,8048,8050,8054,8056,8058,8060,8062,8112,8114,8126,8128,8144,8146,8160,8162,8526,
+8528,8560,8576,8580,8582,9424,9450,11312,11360,11366,11368,11374,11382,11384,11500,11504,11520,11558,42874,42878,42892,
+42894,42900,42902,42952,42956,42998,43000,43888,43968,65346,65372,66600,66640,66776,66812,66968,66978,66980,66994,66996,
+67002,67004,67006,68800,68852,68976,68998,71872,71904,93792,93824,125218,125252
+};
+const int tu_upper_shifts_even[] = {
+0,-32,0,-32,0,-1,0,-1,195,0,-1,0,-1,0,-1,0,163,0,130,0,-1,0,-1,0,-1,0,-2,-1,0,-2,-1,0,-1,0,-1,0,10815,-1,0,10783,10782,
+-206,-205,0,42319,0,-205,0,42343,42308,-209,42308,42305,0,-213,0,-218,42307,0,-218,-217,-71,0,-219,0,42258,0,130,0,-38,
+-37,0,-32,-31,-32,-64,-63,-62,0,-54,0,-86,7,0,-1,0,-32,-80,0,-1,0,-48,0,3008,0,3008,0,-8,0,-6254,-6244,-6242,-6236,
+35266,-1,0,35384,0,8,0,8,0,8,0,8,0,8,0,8,0,74,86,100,128,112,126,0,8,0,-7205,0,8,0,8,0,-28,0,-16,0,-1,0,-26,0,-48,0,
+-10792,-1,0,-1,0,-1,0,-7264,0,-1,0,-1,0,48,0,-1,0,-1,0,-38864,0,-32,0,-40,0,-40,0,-39,0,-39,0,-39,0,-39,0,-64,0,-32,0,
+-32,0,-32,0,-34,0
+};
+const uint32_t tu_upper_indices_odd[] = {
+1,97,123,181,183,225,247,249,255,257,305,307,313,331,377,383,385,387,391,405,407,409,411,413,417,423,429,431,441,443,
+445,447,449,453,455,457,459,461,477,479,497,499,501,503,505,545,547,565,575,577,583,593,595,597,599,601,603,605,609,611,
+613,615,617,619,621,623,625,627,629,631,637,639,643,645,647,649,651,653,669,671,837,839,881,885,887,889,891,895,941,945,
+973,975,977,979,981,983,985,1009,1011,1013,1015,1019,1021,1073,1105,1121,1155,1163,1217,1231,1233,1329,1377,1415,4305,
+4347,4349,4353,5113,5119,7297,7299,7301,7303,7305,7545,7547,7549,7551,7681,7831,7835,7837,7841,7937,7945,7953,7959,7969,
+7977,7985,7993,8001,8007,8017,8025,8033,8041,8049,8051,8055,8057,8059,8061,8063,8113,8115,8145,8147,8161,8163,8165,8167,
+8561,8577,9425,9451,11313,11361,11363,11365,11367,11379,11381,11393,11493,11507,11509,11521,11561,11565,11567,42561,
+42607,42625,42653,42787,42801,42803,42865,42879,42889,42897,42901,42903,42923,42933,42949,42957,42959,42961,42963,42967,
+42973,43859,43861,43889,43969,65345,65371,66601,66641,66777,66813,66967,67005,68801,68851,68977,68999,71873,71905,93793,
+93825,125219,125253
+};
+const int tu_upper_shifts_odd[] = {
+0,-32,0,743,0,-32,0,-32,121,-1,-232,-1,0,-1,0,-300,0,-1,0,97,0,-1,42561,0,-1,0,-1,0,-1,0,-1,56,0,-1,0,-2,-1,0,-79,-1,0,
+-2,-1,0,-1,0,-1,0,10815,0,-1,10780,-210,0,-205,-202,-203,0,42315,-207,42280,0,-211,10743,0,-211,10749,0,-214,0,10727,0,
+-218,0,42282,-69,-217,0,42261,0,84,0,-1,0,-1,0,130,0,-37,-32,-63,0,-57,0,-47,-8,-1,-80,-116,-96,0,-1,0,-32,-80,-1,0,-1,
+0,-15,-1,0,-48,0,3008,0,3008,0,-8,0,-6253,-6242,-6243,-6181,0,35332,0,3814,0,-1,0,-59,0,-1,8,0,8,0,8,0,8,0,8,0,8,0,8,0,
+74,86,100,128,112,126,0,8,0,8,0,8,0,7,0,-16,0,-26,0,-48,-1,0,-10795,0,-1,0,-1,0,-1,0,-7264,0,-7264,0,-1,0,-1,0,-1,0,-1,
+0,-1,0,-1,0,-1,0,-1,0,-1,0,-1,0,-1,0,-928,0,-38864,0,-32,0,-40,0,-40,0,-39,0,-64,0,-32,0,-32,0,-32,0,-34,0
+};
+
+const int tu_case_lens[] = {
+    sizeof tu_lower_indices_even / sizeof(uint32_t),
+    sizeof tu_lower_indices_odd / sizeof(uint32_t),
+    sizeof tu_upper_indices_even / sizeof(uint32_t),
+    sizeof tu_upper_indices_odd / sizeof(uint32_t)
+};
+const uint32_t *tu_case_indices[] =
+    { tu_lower_indices_even, tu_lower_indices_odd, tu_upper_indices_even, tu_upper_indices_odd };
+const int *tu_case_shifts[] =
+    { tu_lower_shifts_even,  tu_lower_shifts_odd,  tu_upper_shifts_even, tu_upper_shifts_odd };
+
+#define CASE_LOWER 0
+#define CASE_UPPER 2
+
+typedef struct {
+    uint32_t s[3];
+    int len;
+} uint32_x3_t;
+
+uint32_x3_t tu_case_cp(uint32_t c, int _case) {
+    assert(c < 0x110000);
+    uint32_t *s;
+    #define TU_C(i, ...) case i: s = (uint32_t[3]){ __VA_ARGS__ }; goto multichar;
+    if(_case == CASE_UPPER) {
+        switch(c) {
+TU_C(223,83,83)TU_C(329,700,78)TU_C(496,74,780)TU_C(912,921,776,769)TU_C(944,933,776,769)TU_C(1415,1333,1362)
+TU_C(7830,72,817)TU_C(7831,84,776)TU_C(7832,87,778)TU_C(7833,89,778)TU_C(7834,65,702)TU_C(8016,933,787)
+TU_C(8018,933,787,768)TU_C(8020,933,787,769)TU_C(8022,933,787,834)TU_C(8064,7944,921)TU_C(8065,7945,921)
+TU_C(8066,7946,921)TU_C(8067,7947,921)TU_C(8068,7948,921)TU_C(8069,7949,921)TU_C(8070,7950,921)TU_C(8071,7951,921)
+TU_C(8072,7944,921)TU_C(8073,7945,921)TU_C(8074,7946,921)TU_C(8075,7947,921)TU_C(8076,7948,921)TU_C(8077,7949,921)
+TU_C(8078,7950,921)TU_C(8079,7951,921)TU_C(8080,7976,921)TU_C(8081,7977,921)TU_C(8082,7978,921)TU_C(8083,7979,921)
+TU_C(8084,7980,921)TU_C(8085,7981,921)TU_C(8086,7982,921)TU_C(8087,7983,921)TU_C(8088,7976,921)TU_C(8089,7977,921)
+TU_C(8090,7978,921)TU_C(8091,7979,921)TU_C(8092,7980,921)TU_C(8093,7981,921)TU_C(8094,7982,921)TU_C(8095,7983,921)
+TU_C(8096,8040,921)TU_C(8097,8041,921)TU_C(8098,8042,921)TU_C(8099,8043,921)TU_C(8100,8044,921)TU_C(8101,8045,921)
+TU_C(8102,8046,921)TU_C(8103,8047,921)TU_C(8104,8040,921)TU_C(8105,8041,921)TU_C(8106,8042,921)TU_C(8107,8043,921)
+TU_C(8108,8044,921)TU_C(8109,8045,921)TU_C(8110,8046,921)TU_C(8111,8047,921)TU_C(8114,8122,921)TU_C(8115,913,921)
+TU_C(8116,902,921)TU_C(8118,913,834)TU_C(8119,913,834,921)TU_C(8124,913,921)TU_C(8130,8138,921)TU_C(8131,919,921)
+TU_C(8132,905,921)TU_C(8134,919,834)TU_C(8135,919,834,921)TU_C(8140,919,921)TU_C(8146,921,776,768)TU_C(8147,921,776,769)
+TU_C(8150,921,834)TU_C(8151,921,776,834)TU_C(8162,933,776,768)TU_C(8163,933,776,769)TU_C(8164,929,787)TU_C(8166,933,834)
+TU_C(8167,933,776,834)TU_C(8178,8186,921)TU_C(8179,937,921)TU_C(8180,911,921)TU_C(8182,937,834)TU_C(8183,937,834,921)
+TU_C(8188,937,921)TU_C(64256,70,70)TU_C(64257,70,73)TU_C(64258,70,76)TU_C(64259,70,70,73)TU_C(64260,70,70,76)
+TU_C(64261,83,84)TU_C(64262,83,84)TU_C(64275,1348,1350)TU_C(64276,1348,1333)TU_C(64277,1348,1339)TU_C(64278,1358,1350)
+TU_C(64279,1348,1341)
+            default: break;
+            multichar:
+            return (uint32_x3_t){ .s = { s[0], s[1], s[2] }, .len = 2 + (s[2] != 0) };
+        }
+    } else if(c == 304) return (uint32_x3_t){ .s = { 105, 775 }, .len = 2 };
+    #undef TU_C
+    const uint32_t *indices = tu_case_indices[c % 2 + _case];
+    const int *shifts = tu_case_shifts[c % 2 + _case];
+    int len = tu_case_lens[c % 2 + _case];
+    int i = tu_binary_search(indices, len, c);
+    return (uint32_x3_t){ .s = { c + shifts[i] }, .len = 1 };
+}
+
+// to_uppercase or to_lowercase result length
+// _case - CASE_UPPER or CASE_LOWER
+int tu_case_len(const char *src, int len, int _case) {
+    int l = 0;
+    for(const char *s = src; s < src + len;) {
+        uint32_t c;
+        char *s_ = step_utf8_cp((char*)s, src + len - s, &c);
+        if(s_ == s) { s ++; l ++; continue; }
+        uint32_x3_t r = tu_case_cp(c, _case);
+        for(int i = 0; i < r.len; i ++) {
+            uint32_t c = r.s[i];
+            l += 1 + (c >= 0x80) + (c >= 0x800) + (c >= 0x10000);
+        }
+        s = s_;
+    }
+    return l;
+}
+
+// to_uppercase or to_lowercase
+// _case - CASE_UPPER or CASE_LOWER
+// movables - indices into src that get modified to point to respective places in dst
+// nm - count of movables
+int tu_case(char *dst, const char *src, int len, int _case, int *movables, int nm) {
+    bool *moved_flags = malloc(sizeof(bool) * nm);
+    char *_dst = dst;
+    for(const char *s = src; s < src + len;) {
+        char *d = dst;
+        uint32_t c;
+        char *s_ = step_utf8_cp((char*)s, src + len - s, &c);
+        if(s_ == s) { *(dst ++) = *s; s_ ++; goto cnt; }
+        uint32_x3_t r = tu_case_cp(c, _case);
+        for(int i = 0; i < r.len; i ++) dst = write_utf8_cp(dst, r.s[i]);
+        cnt:
+        for(int i = 0; i < nm; i ++) {
+            if(s - src <= movables[i] && movables[i] < s_ - src && !moved_flags[i]) {
+                movables[i] = d - _dst;
+                moved_flags[i] = true;
+            }
+        }
+        s = s_;
+    }
+    for(int i = 0; i < nm; i ++) {
+        if(!moved_flags[i] && movables[i] >= len) movables[i] += dst - _dst - len;
+    }
+    free(moved_flags);
+    return dst - _dst;
+}
+
+#if TU_SYSTEM == TU_WINDOWS
 // copying behavior of the wcwidth python package
-const uint32_t _wcwidth_indices[] = {
+const uint32_t tu_wcwidth_indices[] = {
 0,1,32,127,160,768,880,1155,1162,1425,1470,1471,1472,1473,1475,1476,1478,1479,1480,1552,1563,1564,1565,1611,1632,1648,
 1649,1750,1757,1759,1765,1767,1769,1770,1774,1809,1810,1840,1867,1958,1969,2027,2036,2045,2046,2070,2074,2075,2084,2085,
 2088,2089,2094,2137,2140,2199,2208,2250,2274,2275,2308,2362,2365,2366,2384,2385,2392,2402,2404,2433,2436,2492,2493,2494,
@@ -585,8 +867,7 @@ const uint32_t _wcwidth_indices[] = {
 129340,129350,129351,129536,129648,129661,129664,129675,129678,129735,129736,129737,129741,129757,129759,129771,129775,
 129785,131072,196606,196608,262142,917504,921600,1114112
 };
-
-const int _wcwidth_widths[] = {
+const int tu_wcwidth_widths[] = {
 0,-1,1,-1,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,
 0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,
 0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,
@@ -605,16 +886,8 @@ const int _wcwidth_widths[] = {
 2,1,2,1,2,1,2,1,2,1,2,1,2,1,2,1,0,1,-1
 };
 
-int _wcwidth(uint32_t c) {
-    int l = 0;
-    int u = sizeof _wcwidth_indices / sizeof(uint32_t) - 1;
-    if(_wcwidth_indices[u] <= c) return _wcwidth_widths[u];
-    while(u - l > 1) {
-        int m = (u + l) / 2;
-        if(_wcwidth_indices[m] <= c) l = m;
-        else u = m;
-    }
-    return _wcwidth_widths[l];
+int tu_wcwidth(uint32_t c) {
+    return tu_wcwidth_widths[tu_binary_search(tu_wcwidth_indices, sizeof tu_wcwidth_indices, c)];
 }
 #endif
 
@@ -623,7 +896,7 @@ int _wcwidth(uint32_t c) {
 // - \t: moves cursor to next of 1,9,17,25,... columns
 // - \n: translated into \r\n optionally preceded by clearing rest of line
 // - \v, \f: both passed to terminal as is, both move cursor down 1 line
-// - \e + "\[[0-9;]*m" (view ".." as regex): changes output appearence; passed as is and appended to color_stack
+// - (\e\[|\x9B|\xC2\x9B)[0-9;]*m (view as regex): changes output appearence; passed as is but using CSI \e[ and appended to color_stack
 // - any other ASCII control (0-31), including \e when not postfixed with "\[[0-9;]*m": displayed as one of U+2400...U+241F ␀␁␂␃␄␅␆␇␈␉␊␋␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟
 // - printable ASCII (32-126): displayed as is
 // - DEL (ASCII 127): displayed as U+2421 ␡
@@ -634,24 +907,27 @@ int _wcwidth(uint32_t c) {
 // ARGS:
 // - s: pointer to the beginning of an item
 // - len: maximum length of the item (length of s)
-// - p (NOT nullable): current position
-// - width: terminal window width
+// - p (nullable when out is NULL): current position
+// - width: terminal window width, not used when p is NULL
 // - split_wchars: whether printing wide character that does not fit on a line splits it into parts (e.g. on non-graphical TTY)
-//                 or gets it wrapped to the next line as a whole (e.g. in all graphical terminals I tested)
+//                 or gets it wrapped to the next line as a whole (e.g. in all graphical terminals I tested); not used when p is NULL
 // - out (nullable): where to append what shall go to the terminal
-// - color_stack (nullable when out is NULL): where to append \e + "\[[0-9;]*m" sequences; used to restore color/appearence
+// - color_stack (nullable when out is NULL): where to append (\e\[|\x9B|\xC2\x9B)[0-9;]*m sequences; used to restore color/appearence
 // - cursor (nullable): a cursor to advanse accourding to the consumed item
 // RETURNS pointer to right after the item
 char *step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str_t *out, str_t *color_stack, cursor_t *cursor) {
     int bytes;
     // == special control items: ==
     if(*s == '\t') {
-        int x = ((p->x - 1) / 8) * 8 + 9;
-        if(x > width) x = width;
-        if(cursor) { cursor->col += x - p->x; cursor->chr ++; }
-        if(x > p->x) {
-            if(out) str_printf(out, TERM_CURSOR_RIGHT, x - p->x);
-            p->x = x;
+        if(p) {
+            int x = ((p->x - 1) / 8) * 8 + 9;
+            if(x > width) x = width;
+            if(cursor) { cursor->col += x - p->x; cursor->cp ++; }
+            if(x > p->x) {
+                if(out) for(int i = 0; i < x - p->x; i ++) str_append_lit(out, " ");
+                //if(out) str_append_lit(out, "\t");
+                p->x = x;
+            }
         }
         bytes = 1; goto ret;
     }
@@ -660,22 +936,34 @@ char *step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str_t 
             if(p->bouta_wrap) str_append_lit(out, "\r\n");
             else str_append_lit(out, TERM_CLEAR_LINE_RIGHT "\r\n");
         }
-        p->y ++; p->x = 1; p->bouta_wrap = false;
-        if(cursor) { cursor->row ++; cursor->col = 0; cursor->chr = 0; }
+        if(p) { p->y ++; p->x = 1; p->bouta_wrap = false; }
+        if(cursor) { cursor->row ++; cursor->col = 0; cursor->cp = 0; cursor->row_byte = -1; }
         bytes = 1; goto ret;
     }
     if(*s == '\v' || *s == '\f') {
-        if(out) str_append(out, s, 1);
-        p->y ++; p->bouta_wrap = false;
-        if(cursor) { cursor->chr ++; }
+        if(out) {
+            str_append_lit(out, TERM_CLEAR_LINE_RIGHT);
+            str_append(out, s, 1);
+            str_append_lit(out, TERM_CLEAR_LINE_LEFT);
+        }
+        if(p) { p->y ++; p->bouta_wrap = false; }
+        if(cursor) { cursor->cp ++; }
         bytes = 1; goto ret;
     }
-    if(*s == '\033' && len >= 3 && s[1] == '[') {
+    if((*s == '\033' && len >= 3 && s[1] == '[') ||    // regular CSI (\e[)
+       (*s == '\233' && len >= 2)                ||    // CSI char (\x9B)
+       (*s == '\302' && len >= 3 && s[1] == '\233')) { // CSI char in utf8
+        char *s_ = s + 1 + (*s != '\233');
         int i;
-        for(i = 2; i < len; i ++) if((s[i] < '0' || s[i] > '9') && s[i] != ';') break;
+        for(i = s_ - s; i < len; i ++)
+            if((s[i] < '0' || s[i] > '9') && s[i] != ';') break;
         if(i < len && s[i] == 'm') {
-            if(out) str_append(out, s, i + 1);
-            if(color_stack) str_append(color_stack, s, i + 1);
+            if(out) { str_append_lit(out, "\33["); str_append(out, s_, s + i + 1 - s_); }
+            if(color_stack) {
+                int l = s + i - s_;
+                if(l == 1 && *s_ == '0' || l == 0) color_stack->len = 0; // \e[0m of \e[m erases color stack
+                else { str_append_lit(color_stack, "\33["); str_append(color_stack, s_, s + i + 1 - s_); }
+            }
             bytes = i + 1; goto ret;
         }
     }
@@ -699,22 +987,26 @@ char *step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str_t 
         if(out) str_append_lit(out, "\xEF\xBF\xBD"); // replacement char �
         bytes = 1; goto advanse;
     }
-    #if _TERM_SYSTEM == _TERM_WINDOWS
-    w = _wcwidth(cp);
+    #if TU_SYSTEM == TU_WINDOWS
+    w = tu_wcwidth(cp);
     #else
     w = (uint32_t)(wchar_t)cp == cp ? wcwidth(cp) : -1;
     #endif
+    if(cp == 0x200D) {
+        printf("\n\r[%i]\n\r", w);
+    }
     if(w >= 0) {
         if(out) str_append(out, s, s_ - s);
     } else {
+//        exit(0);
         if(out) str_printf(out, TERM_COLOR_INVERSE "<%.*" PRIX32 ">" TERM_COLOR_RESET "%.*s", cp <= 0xFFFF ? 4 : 8, cp, color_stack->len, color_stack->s);
         w = 1;
         n = cp <= 0xFFFF ? 6 : 10;
     }
     bytes = s_ - s;
     advanse:
-    if(cursor && w > 0) { cursor->chr ++; cursor->col += w; }
-    for(int i = 0; i < n; i ++) {
+    if(cursor && w > 0) { cursor->cp ++; cursor->col += w; }
+    if(p) for(int i = 0; i < n; i ++) {
         if(p->bouta_wrap) {
             p->x = 1 + w;
             if(p->x > width) p->x = width;
@@ -731,18 +1023,86 @@ char *step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str_t 
         }
     }
     ret:
-    if(cursor) cursor->byte += bytes;
+    if(cursor) { cursor->byte += bytes; cursor->row_byte += bytes; }
     return s + bytes;
 }
 
-#define _REORIGIN_RESTORE 1
-#define _REORIGIN_COMPUTE 2
+// get boundaries of a utf8 cp; like item_boundary
+// return as if single char when not a part of a valid cp
+void utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
+    if((s[at] & 0x80) == 0) goto single;
+    char *b, *e;
+    uint32_t c;
+    if(at >= 0)           { b = s + at    ; e = step_utf8_cp(b, len - at    , &c); }
+    if(at >= 1 && b == e) { b = s + at - 1; e = step_utf8_cp(b, len - at + 1, &c); }
+    if(at >= 2 && b == e) { b = s + at - 2; e = step_utf8_cp(b, len - at + 2, &c); }
+    if(at >= 3 && b == e) { b = s + at - 3; e = step_utf8_cp(b, len - at + 3, &c); }
+    if(e > s + at) {
+        if(begin) *begin = b - s; if(end) *end = e - s;
+        #if TU_SYSTEM == TU_WINDOWS
+        int w = tu_wcwidth(c);
+        #else
+        int w = (uint32_t)(wchar_t)c == c ? wcwidth(c) : -1;
+        #endif
+        if(width) *width = w < 0 ? 1 : w;
+        return;
+    }
+    single:
+    if(begin) *begin = at; if(end) *end = at + 1;
+    if(width) *width = 1;
+}
 
-// content of terminal (editable part starting from last prompt "origin")
+//int ii = 0;
+
+// get boundaries of the item in `s` that contains `at` byte
+// at should be in [0, len)
+// begin, end - nullable output params
+void item_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
+    // testing for (\e\[|\x9B|\xC2\x9B)[0-9;]*m
+    int csi_test = -1; // after or right on CSI end, strictly before 'm'
+    if(s[at] == ']' || '0' <= s[at] && s[at] <= '9' || s[at] == ';') csi_test = at;
+    if(s[at] == 'm') csi_test = at - 1;
+    if(s[at] == '\33' || s[at] == '\233') csi_test = at + 1;
+    if(s[at] == '\302') csi_test = at + 2;
+    if(csi_test >= 0 && csi_test < len - 1) {
+        // forward check
+        int i;
+        for(i = csi_test + 1; i < len; i ++) if((s[i] < '0' || s[i] > '9') && s[i] != ';') break;
+        if(i >= len || s[i] != 'm') goto no_csi;
+        if(end) *end = i + 1;
+        // backwards check
+        for(i = csi_test; i >= 0; i --) if((s[i] < '0' || s[i] > '9') && s[i] != ';') break;
+        int b;
+        if(i >= 1 && s[i] == '[' && s[i - 1] == '\33') { b = i - 1; goto csi; } // \e[ SCI
+        if(i >= 1 && s[i] == '\233' && s[i - 1] == '\302') { b = i - 1; goto csi; } // csi char \x9B in utf8
+        if(i >= 0 && s[i] == '\233') b = i; // csi char \x9B raw
+        if(b > 0) { // testing that raw \x9B is not a part of a cp
+            int _e;
+            utf8_cp_boundary(s, len, b - 1, NULL, &_e, NULL);
+            if(_e != b) goto no_csi;
+        } else goto no_csi;
+        csi:
+        if(begin) *begin = b;
+        if(width) *width = 0;
+        return;
+    }
+    no_csi:
+    utf8_cp_boundary(s, len, at, begin, end, width);
+//    if(ii) { printf("\r\n{%i %i %i %i}\r\n", *begin, *end, at, len); exit(0); }
+}
+
+// how to find the origin after a window resize
+#define REORIGIN_RESTORE 1 // using save (\e7) + restore (\e8), tested and works in gnu terminal & xfce terminal
+                           // where the origin is adjusted after rewrapping lines, and in xterm where lines are not rewrapped
+#define REORIGIN_COMPUTE 2 // compute assuming lines rawrapping and that the cursor remains on the same char
+                           // used on windows because windows console does not auto-agjust saved pos on rewrap
+
+// content of terminal (editable part starting from "origin")
 // is editable by replacing everything starting at a byte (i.e. keeping a part)
 // should handle resizing given no resize happens while the resize handler is running and the content fits in the window
-// the origin should be saved via \e7
-// apparently terminals that auto-recalculate line wrapping on resizes also auto adjust saved position (only on re-wrapping, not on wripping when writing the the terminal)
+// if REORIGIN_RESTORE is used, the origin should be saved via \e7
+// apparently terminals other than windows console that auto-recalculate line wrapping on resizes
+// also auto adjust saved position (only on re-wrapping, not on wripping when writing to the terminal)
 typedef struct {
     char *s;
     int len, size;
@@ -756,15 +1116,19 @@ typedef struct {
                        // `false` means the whole thing is printed on the next line, `true` means it gets split between lines
     str_t input_buf; // when checking cursor location, other data than the responce gets put here; also in content_wait_in
     int cursor_byte; // where the cursor shall point to; in [0, len]; negative means hide cursor and put it anywhere
-    bool cursor_unwrapped;
-    bool resize_pending;
+    bool cursor_bw; // indicates that on the last render cursor ended up with bouta_wrap=true, thus pointing to previous char to cursor_byte
+    bool resize_pending; // need to process resize before rendering
+    long resize_timeout; // if non-negative, only rerender after this number of ms of no resizes, in content_wait_in, to avoid race conditions
+                         // used on windows, though the necessity of this could've been dictated by testing on a super-laggy vm
     int error; // gets set to CONT_ERR_* on an error; when non-zero, content is considered corrupted and all content_* funtions on it return immediately
-    int reorigin_method;
-    #if _TERM_SYSTEM == _TERM_WINDOWS
-    wchar_t high_surrogate;
+    int reorigin_method; // REORIGIN_*
+    #if TU_SYSTEM == TU_WINDOWS
+    wchar_t high_surrogate; // temp storage for high utf16 surrogate read from console, to then join with lower surrogate
+                            // 0 when no high surrogate is pending
     #endif
 } content_t;
 
+// values for content_t.error
 #define CONT_ERR_GETPOS  1
 #define CONT_ERR_GETSIZE 2
 #define CONT_ERR_OUT     3
@@ -773,44 +1137,41 @@ typedef struct {
 #define CONT_ERR_IN      6
 #define CONT_ERR_TEST    7
 
-content_t content_create() {
+content_t content_create(FILE *in, FILE *out) {
     content_t t = (content_t){
         .s = NULL, .len = 0, .size = 0,
         // .line_sizes = NULL, .n_lines = 0,
-        .out = stdout, .in = stdin,
+        .out = out, .in = in,
         .split_wchars = false, // todo: figure this out
         .input_buf = (str_t){ .s = NULL, .len = 0, .size = 0 },
         .error = 0,
         .cursor_byte = 0,
-        .cursor_unwrapped = false,
+        .cursor_bw = false,
         .resize_pending = false,
-        #if _TERM_SYSTEM == _TERM_WINDOWS
-        .reorigin_method = _REORIGIN_COMPUTE,
+        #if TU_SYSTEM == TU_WINDOWS
+        .resize_timeout = 100,
+        .reorigin_method = REORIGIN_COMPUTE,
         .high_surrogate = 0
         #else
-        .reorigin_method = _REORIGIN_RESTORE
+        .resize_timeout = -1,
+        .reorigin_method = REORIGIN_RESTORE
         #endif
     };
     if(term_get_size(t.in, t.out, &t.width, &t.height) < 0)
         { t.error = CONT_ERR_GETSIZE; return t; }
     if(fprintf(t.out, "\r" TERM_CURSOR_SAVE) < 0)
         { t.error = CONT_ERR_OUT; return t; }
-    //printf("11\r\n");
     t.origin = term_get_pos(t.out, t.in, &t.input_buf).y;
-    //printf("22\r\n");
     if(t.origin < 0) t.error = CONT_ERR_GETPOS;
-    #if _TERM_SYSTEM == _TERM_UNIX
+    #if TU_SYSTEM == TU_UNIX
     if(setup_resize_watch() < 0) t.error = CONT_ERR_SETUP;
     #endif
     return t;
 }
 
-//int ii = 1;
-
-// todo: fix comment
 // render the content starting at byte `start`
-// refuses to write to terminal if a resize is pending (_winch flag)
-// in this case one should first call content_resize
+// refuses to write to terminal if the window has been resized (tu_winch on unix or size change on windows)
+// in this case t->resize_pending is set and one should first call content_resize
 void content_render_from(content_t *t, int start) {
     if(t->error || t->resize_pending) return;
     assert(0 <= start && start <= t->len);
@@ -822,27 +1183,22 @@ void content_render_from(content_t *t, int start) {
     str_t cs  = (str_t){ .s = NULL, .len = 0, .size = 0 };
     char *s = t->s;
     if(start) {
-        pos_t __pos = pos;
-        int __cs_len = 0;
+        pos_t _pos = pos, __pos = pos;
+        int _cs_len = 0, __cs_len = 0;
+        char *_s = s, *__s = s;
         for(;;) {
-            pos_t _pos = pos;
-            int _cs_len = cs.len;
-            char *s_ = step_item(s, (t->s + start) - s, &pos, t->width, t->split_wchars, NULL, &cs, NULL);
-            if(!got_cur && t->cursor_byte && s_ - t->s >= t->cursor_byte) { cur = pos; got_cur = true; }
-            if(s_ > t->s + start) {
-                pos = _pos;
-                cs.len = _cs_len;
-                break;
-            }
-            if(!pos.bouta_wrap) { __pos = pos; __cs_len = cs.len; } // saving pre-bouta_wrap situation 'cause restoring bouta_wrap flag with TERM_CURSOR_TO is impossible
-            if(s_ == t->s + start) break;
+            int _x = pos.x, _y = pos.y, _b = s - t->s;
+            s = step_item(s, (t->s + start) - s, &pos, t->width, t->split_wchars, NULL, &cs, NULL);
+            if(!got_cur && s - t->s >= t->cursor_byte) { cur = pos; got_cur = true; }
+            if(s > t->s + start) break;
+            if(_x != pos.x || _y != pos.y) { __pos = _pos; __cs_len = _cs_len; __s = _s; }
+            if(!pos.bouta_wrap) { _pos = pos; _cs_len = cs.len; _s = s; } // saving pre-bouta_wrap situation 'cause restoring bouta_wrap flag with TERM_CURSOR_TO is impossible
+            if(s >= t->s + start) break;
         }
-        pos = __pos;
-        cs.len = __cs_len;
-        str_append(&out, cs.s, cs.len);
+        pos = __pos; cs.len = __cs_len; s = __s;
         str_append_lit(&out, TERM_COLOR_RESET TERM_CURSOR_HIDE);
         str_printf(&out, TERM_CURSOR_TO, pos.y, pos.x);
-    //} else str_append_lit(&out, TERM_COLOR_RESET TERM_CURSOR_HIDE TERM_CURSOR_RESTORE "\r");
+        str_append(&out, cs.s, cs.len);
     } else str_printf(&out, TERM_COLOR_RESET TERM_CURSOR_HIDE TERM_CURSOR_TO, t->origin, 1);
     bool overflow = false;
     while(s < t->s + t->len) {
@@ -862,15 +1218,17 @@ void content_render_from(content_t *t, int start) {
     //str_printf(&out, TERM_CURSOR_TO TERM_CURSOR_SAVE, t->origin >= 1 ? t->origin : 1, 1);
     //str_printf(&out, TERM_CURSOR_TO "[]", t->origin >= 1 ? t->origin : 1, 1);
     if(t->cursor_byte >= 0) {
+        if(t->cursor_byte < t->len && t->s[t->cursor_byte] != '\n' && cur.bouta_wrap)
+            { cur.x = 0; cur.y ++; cur.bouta_wrap = false; }
         str_printf(&out, TERM_CURSOR_TO TERM_CURSOR_SHOW, cur.y >= 1 ? cur.y : 1, cur.x);
-        t->cursor_unwrapped = cur.bouta_wrap;
+        t->cursor_bw = cur.bouta_wrap;
     } else str_printf(&out, TERM_CURSOR_TO, t->origin >= 1 ? t->origin : 1, 1);
     if(out.len) {
         int r = term_check_resize(t->in, t->out, &t->width, &t->height);
         if(r < 0) { t->error = CONT_ERR_GETSIZE; goto ret; }
         if(r) { t->resize_pending = true; goto ret; }
         //if(fwrite(out.s, 1, out.len, t->out) < 0) t->error = CONT_ERR_OUT;
-        if(_fwrite_utf8(out.s, out.len, t->out) < 0) t->error = CONT_ERR_OUT;
+        if(tu_fwrite_utf8(out.s, out.len, t->out) < 0) t->error = CONT_ERR_OUT;
         else if(fflush(t->out) < 0) t->error = CONT_ERR_OUT;
     }
     ret:
@@ -881,25 +1239,41 @@ void content_render_from(content_t *t, int start) {
 // replace the rest of the content starting from byte `start` with `cont` of length `len`
 // `start` should be in [0, t->len], `len` may be zero
 // also attempts to render replaced part of ccontent (if no resize is pending)
-void content_change(content_t *t, int start, char *cont, int len) {
-    if(t->error) return;
+void content_change(content_t *t, int start, const char *cont, int len) {
     assert(0 <= start && start <= t->len);
     assert(len >= 0);
+    if(t->error) return;
+    bool item_cut = false; // if we are _possibly_ cutting an item
+    int b = start;
+    if(start > 0) {
+        int e;
+        item_boundary(t->s, t->len, start - 1, &b, &e, NULL);
+//        printf("\r\n[%i %i %i]\r\n", b, e, start);
+        if(e == start) b = start;
+    }
     t->len = start;
     str_append((str_t*)t, cont, len);
-    t->cursor_byte = len;
-    content_render_from(t, start);
+    if(start > 0 && b == start) {
+        int e;
+        item_boundary(t->s, t->len, start - 1, &b, &e, NULL);
+        if(e == start) b = start;
+    }
+    if(item_cut) printf("\r\n=========================\r\n");
+    content_render_from(t, b);
 }
 
-#if _TERM_SYSTEM == _TERM_WINDOWS
-#define sleep_ms Sleep
+// todo: watch over content error from tl
+
+#if TU_SYSTEM == TU_WINDOWS
+#define tu_sleep_ms Sleep
 #else
-void sleep_ms(unsigned long t) {
-    struct timespec ts = _ms2ts(t);
+void tu_sleep_ms(unsigned long t) {
+    struct timespec ts = tu_ms2ts(t);
     nanosleep(&ts, NULL);
 }
 #endif
 
+// relative position after writing `s` up to `byte` starting at x=1, i.e. with y starting at 0
 pos_t term_rel_pos(int width, bool split_wchars, char *s, int len, int byte) {
     pos_t _p;
     pos_t p = { .x = 1, .y = 0, .bouta_wrap = false };
@@ -912,21 +1286,23 @@ pos_t term_rel_pos(int width, bool split_wchars, char *s, int len, int byte) {
     return _p;
 }
 
+#ifndef TU_SAFETY_DELAY
+#define TU_SAFETY_DELAY 4 // before rerendering we shall get no resize for this number of ms to avoid race conditions
+#endif
+
 // rerender the content assuming the terminal window has been resized
 // width and height have to be set before calling this
 void content_resize(content_t *t) {
     t->resize_pending = false;
     if(t->error) return;
-//    if(term_get_size(t->in, &t->width, &t->height) < 0)
-//        { t->error = CONT_ERR_GETSIZE; return; }
-    if(t->reorigin_method == _REORIGIN_RESTORE) {
-        if(0 && t->cursor_byte >= 0) {
+    if(t->reorigin_method == REORIGIN_RESTORE) {
+        if(t->cursor_byte >= 0) {
             // workflow:
             // Save current cursor to `p`; then wait a little; if no winch happens; hide, restore origin, request pos, move cursor to `p`, show
             // Only then see the responce for origin pos. This way in time when the cursor is hidden we don't wait for stdin and avoid flickering
             pos_t p = term_get_pos(t->out, t->in, &t->input_buf);
             if(p.x < 0) { t->error = CONT_ERR_GETPOS; return; }
-            sleep_ms(1); // makes resizing more stable on gnome terminal (and probably other terminals with auto-rewrapping)
+            tu_sleep_ms(TU_SAFETY_DELAY); // makes resizing more stable on gnome terminal (and probably other terminals with auto-rewrapping)
             int r = term_check_resize(t->in, t->out, &t->width, &t->height);
             if(r < 0) { t->error = CONT_ERR_GETSIZE; return; }
             if(r) { t->resize_pending = true; return; }
@@ -941,14 +1317,14 @@ void content_resize(content_t *t) {
                fflush(t->out) < 0) { t->error = CONT_ERR_OUT; return; }
             t->origin = term_read_pos(t->out, t->in, &t->input_buf).y;
             if(t->origin < 0) { t->error = CONT_ERR_OUT; return; }
-            sleep_ms(1); // makes resizing more stable on gnome terminal (and probably other terminals with auto-rewrapping)
+            tu_sleep_ms(1); // makes resizing more stable on gnome terminal (and probably other terminals with auto-rewrapping)
         }
-    } else if(t->reorigin_method == _REORIGIN_COMPUTE) {
+    } else if(t->reorigin_method == REORIGIN_COMPUTE) {
         pos_t pos = term_get_pos(t->out, t->in, &t->input_buf);
         if(t->cursor_byte < 0) t->origin = pos.y;
         else {
-            pos_t p = term_rel_pos(t->width, t->split_wchars, t->s, t->len, t->cursor_byte - t->cursor_unwrapped);
-            sleep_ms(1);
+            pos_t p = term_rel_pos(t->width, t->split_wchars, t->s, t->len, t->cursor_byte - t->cursor_bw);
+            tu_sleep_ms(TU_SAFETY_DELAY);
             int r = term_check_resize(t->in, t->out, &t->width, &t->height);
             if(r < 0) { t->error = CONT_ERR_GETSIZE; return; }
             if(r) { t->resize_pending = true; return; }
@@ -961,54 +1337,918 @@ void content_resize(content_t *t) {
 // wait for data received on t->in, handling window resizes
 // all received data gets read and put into t->input_buf
 void content_wait_in(content_t *t) {
-    //printf(TERM_CURSOR_TO "[%i]\r\n", 1, 1, ii ++);
     if(t->error) return;
     int l = t->input_buf.len;
-    while(t->input_buf.len == l) {
-        //printf(TERM_CURSOR_TO "[%i]\r\n", 1, 1, ii ++);
-        int r = term_wait_resize_or_in(t->in, &t->input_buf, t->resize_pending ? 100 : -1, &t->width, &t->height
-            #if _TERM_SYSTEM == _TERM_WINDOWS
+    if(t->resize_timeout < 0) while(t->resize_pending) content_resize(t);
+    while(t->input_buf.len == l || t->resize_pending) {
+        int r = term_wait_resize_or_in(t->in, &t->input_buf,
+            t->resize_pending ? t->resize_timeout : -1, &t->width, &t->height
+            #if TU_SYSTEM == TU_WINDOWS
             , &t->high_surrogate
             #endif
         );
-        //exit(0);
-        //printf(TERM_CURSOR_TO "[%i]\r\n", 1, 1, ii ++);
         if(r < 0) { t->error = CONT_ERR_WAIT; return; }
         if(r == 1) t->resize_pending = true;
-        else while(t->resize_pending) content_resize(t);
+        int _r = t->resize_timeout;
+        if(r == 0 || t->resize_timeout < 0)
+            while(t->resize_pending) content_resize(t);
     }
     while(t->resize_pending) content_resize(t);
-    //if(_read_avail(t->in, &t->input_buf) < 0) t->error = CONT_ERR_IN;
 }
 
 #define CURSOR_FROM_BYTE 1 // from `byte` field
 #define CURSOR_FROM_COL  2 // from `row` and `col` fields
-#define CURSOR_FROM_CHAR 3 // from `row` and `char` fields
+#define CURSOR_FROM_CP 3 // from `row` and `char` fields
 
 // fill all fields of `dst` cursor from certain field, determined by `source`
 // `source` shall be one of CURSOR_FROM_* constants
 // source fiels may be invalid (e.g. out of bounds or `byte` pointing not to start of an item);
 // corrected naturally in this case
-void content_restore_cursor(content_t *t, cursor_t *dst, int source) {
+void cursor_restore(const content_t *t, cursor_t *dst, int source) {
     assert(1 <= source && source <= 3);
-    cursor_t cur = { .byte = 0, .row = 0, .col = 0, .chr = 0 };
-    cursor_t _cur = cur;
+    cursor_t cur = { 0 };
+    cursor_t _cur = { 0 };
     pos_t pos = (pos_t){ .x = 1, .y = t->origin, .bouta_wrap = false };
     char *s = t->s;
     for(;;) {
         if(source == CURSOR_FROM_BYTE && cur.byte >= dst->byte) { *dst = cur; return; }
-        if(source == CURSOR_FROM_CHAR) {
+        if(source == CURSOR_FROM_CP) {
             if(cur.row > dst->row) { *dst = _cur; return; }
-            if(cur.row == dst->row && cur.chr >= dst->chr) { *dst = cur; return; }
+            if(cur.row == dst->row && cur.cp > dst->cp) { *dst = _cur.row == dst->row ? _cur : cur; return; }
         }
         if(source == CURSOR_FROM_COL) {
             if(cur.row > dst->row) { *dst = _cur; return; }
-            if(cur.row == dst->row && cur.col >= dst->col) { *dst = cur; return; }
+            if(cur.row == dst->row && cur.col > dst->col) { *dst = _cur.row == dst->row ? _cur : cur; return; }
         }
-        if(s - t->s < t->len) break;
+        if(s - t->s >= t->len) break;
         _cur = cur;
         s = step_item(s, t->s + t->len - s, &pos, t->width, t->split_wchars, NULL, NULL, &cur);
     }
     *dst = cur;
 }
-//#endif
+
+typedef struct {
+    char *s;
+    int len, size;
+    int cursor, mark;
+    bool mark_weak;
+} lhrec_t; // line history record
+
+tu_implement_arr(lhrec_arr, lhrec_t)
+
+// text formating sequences \e\[[0-9;]*m
+typedef struct {
+    char *s;
+    int len, size;
+    int at; // before which byte to put it
+    int prio; // smaller go first; non-negative only
+} color_t;
+
+#define TU_INT_HIGH_BIT (~((unsigned int)(-1) >> 1) >> 1)
+
+void color_sort_(color_t *begin, color_t *end, int bit, int level) {
+    color_t *_begin = begin;
+    color_t *_end = end;
+    while(begin < end) {
+        while(begin < end && ((level ? begin->prio : begin->at) & bit) == 0) begin ++;
+        while(begin < end &&  (level ? end->prio   : end->at  ) & bit) end --;
+        color_t temp = *begin; *begin = *end; *end = temp;
+    }
+    color_t *mid = begin + (((level ? begin->prio : begin->at) & bit) == 0);
+    int bit_ = bit >> 1;
+    int level_ = level;
+    if(bit_ == 0) {
+        if(level) return;
+        bit_ = TU_INT_HIGH_BIT;
+        level_ ++;
+    }
+    if(mid - _begin >= 2) color_sort_(_begin, mid - 1, bit_, level_);
+    if(_end - mid >= 1) color_sort_(mid, _end, bit_, level_);
+}
+
+void color_sort(color_t *f, int len) { if(len >= 2) color_sort_(f, f + len - 1, TU_INT_HIGH_BIT, 0); }
+
+tu_implement_arr(color_arr, color_t)
+
+typedef struct {
+    char *s;
+    int len, size;
+    int cursor, mark;
+    bool mark_weak;
+    lhrec_arr_t lh;
+    int lh_idx;
+    int lhrec_type;
+    FILE *in, *out;
+    str_t prompt;
+    str_t nl_prompt;
+    int magnet;
+    str_arr_t killring;
+    int kr_idx;
+} termline_t;
+
+termline_t tl_create(FILE *in, FILE *out) {
+    return (termline_t) {
+        .in = in,
+        .out = out,
+        .mark = -1,
+        .kr_idx = -1
+    };
+}
+
+void tl_set_prompt(termline_t *line, const char *s, int len) {
+    line->prompt.len = 0;
+    str_append(&line->prompt, s, len);
+}
+
+void tl_set_nl_prompt(termline_t *line, const char *s, int len) {
+    line->nl_prompt.len = 0;
+    str_append(&line->nl_prompt, s, len);
+}
+
+#define LHREC_INIT           0
+#define LHREC_INSERT_WORD    1
+#define LHREC_INSERT_NONWORD 2
+#define LHREC_KILL_WORD      3
+#define LHREC_KILL_NONWORD   4
+#define LHREC_YANK           5
+#define LHREC_INDEP          6
+
+void tl_lhrec(termline_t *line, int type, bool advanse) {
+    if(line->lhrec_type != type || type == LHREC_INDEP) {
+        for(int i = line->lh_idx; i < line->lh.len; i ++) {
+            free(line->lh.p[i].s);
+//            printf("\r\nfreeing #%i: %p\r\n", i, line->lh.p[i].s);
+        }
+        line->lh.len = line->lh_idx;
+        lhrec_t rec = *(lhrec_t*)line;
+        str_sovereign((str_t*)&rec);
+        lhrec_arr_append(&line->lh, &rec, 1);
+        if(advanse) line->lh_idx ++;
+    }
+    ret:
+    line->lhrec_type = type;
+}
+
+#define TERM_SEQ_INVALID -1
+#define TERM_SEQ_UNKNOWN  0
+
+#define TERM_SEQ_CSI      1
+#define TERM_SEQ_SS2      2
+#define TERM_SEQ_SS3      3
+#define TERM_SEQ_UTF8     4
+
+#define KEY_UNKNOWN    (uint32_t)-2
+#define KEY_INVALID_CP (uint32_t)-1
+#define KEY_HOME           0x200001
+#define KEY_INSERT         0x200002
+#define KEY_DELETE         0x200003
+#define KEY_END            0x200004
+#define KEY_PAGEUP         0x200005
+#define KEY_PAGEDOWN       0x200006
+#define KEY_F1             0x20000B
+#define KEY_F2             0x20000C
+#define KEY_F3             0x20000D
+#define KEY_F4             0x20000E
+#define KEY_F5             0x20000F
+#define KEY_F6             0x200011
+#define KEY_F7             0x200012
+#define KEY_F8             0x200013
+#define KEY_F9             0x200014
+#define KEY_F10            0x200015
+#define KEY_F11            0x200017
+#define KEY_F12            0x200018
+#define KEY_F13            0x200019
+#define KEY_F14            0x20001A
+#define KEY_F15            0x20001C
+#define KEY_F16            0x20001D
+#define KEY_F17            0x20001F
+#define KEY_F18            0x200020
+#define KEY_F19            0x200021
+#define KEY_F20            0x200022
+#define KEY_ENTER          0x200100
+#define KEY_BACKSPACE      0x200101
+#define KEY_ESCAPE         0x200102
+#define KEY_UP             0x200201
+#define KEY_DOWN           0x200202
+#define KEY_RIGHT          0x200203
+#define KEY_LEFT           0x200204
+
+#define NON_CHAR           0x3E00000
+#define NON_MOD            0x03FFFFF
+
+#define MOD_CTRL           0x0400000
+#define MOD_ALT            0x0800000
+#define MOD_SHIFT          0x1000000
+#define MOD_NUMPAD         0x2000000
+
+typedef struct {
+    char *s;
+    int len;
+    int type;
+    uint32_t key;
+    uint32_t c;
+} input_t;
+
+input_t parse_CSI(char *_s, int len, bool *finished) {
+    *finished = true;
+    unsigned char *s = (unsigned char*)_s + (*_s != '\233') + 1;
+    len -= (*_s != '\233') + 1;
+    if(len == 1 && *s == '[')
+        { *finished = false; return (input_t){ .type = TERM_SEQ_CSI, .s = s, .len = len }; }
+    if(len >= 2 && *s == '[' && 'A' <= s[2] && s[2] <= 'E')
+        { *finished = true; return (input_t){ .type = TERM_SEQ_CSI, .s = s, .len = 2 }; }
+    // ^ linux TTY sequences for F1-F5
+    unsigned char *c = s;
+    for(; c - s < len && 0x30 <= *c && *c < 0x40; c ++);
+    if(c - s < len && !(0x40 <= *c && *c <= 0x7E)) // invalid termination
+        return (input_t){ .type = TERM_SEQ_INVALID };
+    if(c - s >= len) *finished = false;
+    return (input_t){ .type = TERM_SEQ_CSI, .s = s, .len = c - s + 1 };
+}
+
+input_t parse_esc_seq(char *s, int len, bool *finished) {
+    *finished = true;
+    bool is_CSI = (*s == '\033' && len >= 2 && s[1] == '[') ||  // regular CSI
+                  (*s == '\233' && len >= 1)                ||  // CSI char (\x9B)
+                  (*s == '\302' && len >= 2 && s[1] == '\233'); // CSI char in utf8
+    bool is_SS2 = (*s == '\033' && len >= 2 && s[1] == 'N') ||
+                  (*s == '\216' && len >= 1)                ||
+                  (*s == '\302' && len >= 2 && s[1] == '\216');
+    bool is_SS3 = (*s == '\033' && len >= 2 && s[1] == 'O') ||
+                  (*s == '\217' && len >= 1)                ||
+                  (*s == '\302' && len >= 2 && s[1] == '\217');
+    if(*s != '\033' && *s != '\233' && *s != '\216' && *s != '\217' && *s != '\302') goto err;
+    if(len == 1) { *finished = false; return (input_t){ .type = TERM_SEQ_UNKNOWN }; }
+    if(!is_CSI && !is_SS2 && !is_SS3) goto err;
+    if(is_CSI) return parse_CSI(s, len, finished);
+    if(is_SS2 || is_SS3) {
+        unsigned char *s_ = (unsigned char*)s + (*s != (is_SS2 ? '\216' : '\217')) + 1;
+        int l = len - (*s != (is_SS2 ? '\216' : '\217')) - 1;
+        if(l <= 0) {
+            *finished = false;
+            return (input_t){ .type = is_SS2 ? TERM_SEQ_SS2 : TERM_SEQ_SS3, .s = s_, .len = 0 };
+        }
+        if(*s_ < 0x20 || *s_ >= 0x80) return (input_t){ .type = TERM_SEQ_INVALID };
+        return (input_t){ .type = is_SS2 ? TERM_SEQ_SS2 : TERM_SEQ_SS3, .s = s_, .len = 1 };
+    }
+    err:
+    return (input_t){ .type = TERM_SEQ_INVALID };
+}
+
+char *term_step_input(char *s, int len, input_t *in) {
+    bool finished;
+    *in = parse_esc_seq(s, len, &finished);
+    if(!finished) return NULL;
+    if(in->type == TERM_SEQ_CSI || in->type == TERM_SEQ_SS3) {
+        if(in->len == 2 && in->s[0] == '[' && 'A' <= in->s[1] && in->s[1] <= 'E')
+            { in->key = KEY_F1 + in->s[1] - 'A'; goto ret; }
+        if(in->len > 5)
+            { in->key = KEY_UNKNOWN; goto ret; }
+        int k, n, m, modifiers;
+        if(in->len == 1) { k = 1; modifiers = 0; goto parse; }
+        char buf[5] = {0};
+        memcpy(buf, in->s, in->len - 1);
+        int r = sscanf(buf, "%i%n", &k, &n);
+        if(r == 1 && n == in->len - 1) { modifiers = 0; goto parse; }
+        r = sscanf(buf, "%i;%i%n", &k, &m, &n);
+        if(r == 2 && n == in->len - 1) {
+            if(m == 5) modifiers = MOD_CTRL;
+            else if(m == 2) modifiers = MOD_SHIFT;
+            else if(m == 6) modifiers = MOD_CTRL | MOD_SHIFT;
+            else if(m == 3) modifiers = MOD_ALT;
+            else { in->key = KEY_UNKNOWN; goto ret; }
+        }
+        parse:
+        char c = in->s[in->len - 1];
+        if(c == '~') {
+            if(1 <= k && k <= 8 || 11 <= k && k <= 34 && k != 16 && k != 22 && k != 27 && k != 30)
+                in->key = (k == 7 ? KEY_HOME : k == 8 ? KEY_END : KEY_HOME + k - 1) | modifiers;
+            else in->key = KEY_UNKNOWN;
+        }
+        else if(('P' <= c && c <= 'S') && k == 1) in->key = (KEY_F1 + (c - 'P')) | modifiers;
+        else if(c == 'H' && k == 1) in->key = KEY_HOME  | modifiers;
+        else if(c == 'F' && k == 1) in->key = KEY_END   | modifiers;
+        else if(c == 'M' && k == 1) in->key = KEY_ENTER | modifiers | (in->type == TERM_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else if('A' <= c && c <= 'D' && k == 1) in->key = (KEY_UP + c - 'A') | modifiers | (in->type == TERM_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else if('j' <= c && c <= 'y' && k == 1) in->key = (uint32_t)(c - 'j' + '*') | modifiers | (in->type == TERM_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else in->key = KEY_UNKNOWN;
+        ret:
+        return in->s + in->len;
+    } else if(in->type != TERM_SEQ_INVALID) {
+        in->key = KEY_UNKNOWN;
+        return in->s + in->len;
+    }
+    bool esc = *s == '\033';
+    s += esc; len -= esc;
+    if(len == 0) return NULL;
+    char *s_ = step_utf8_cp_partial(s, len, &in->c);
+//    printf("\r\n[%i]", s_ - s);
+    if(s_ > s + len) return NULL;
+    in->s = s;
+    in->type = TERM_SEQ_UTF8;
+    in->len = s_ - s;
+    if(s_ == s) {
+        if(esc) goto esc; 
+        in->key = KEY_INVALID_CP;
+        in->len = 1;
+        return s + 1;
+    }
+//    if((in->c < 0x20 || in->c == 127) && esc) goto esc;
+    if((in->c == '\033') && esc) goto esc;
+    if(in->c == '\r') in->key = KEY_ENTER;
+    else if(in->c == '\033') in->key = KEY_ESCAPE;
+    else if(in->c == '\010') in->key = KEY_BACKSPACE | MOD_CTRL;
+    else if(in->c < 0x20) in->key = (in->c + '@') | MOD_CTRL;
+    else if(in->c == '\177') in->key = KEY_BACKSPACE;
+    else in->key = in->c;
+    if(esc) in->key |= MOD_ALT;
+    return s_;
+    esc:
+    in->s = s - 1;
+    in->len = 1;
+    in->key = KEY_ESCAPE;
+    return s;
+}
+
+int tl_cont2text(termline_t *line, int cursor_byte) {
+    int b = cursor_byte - line->prompt.len;
+    if(b == 0) return 0;
+    int i;
+    for(i = 0; i < line->len; i ++) {
+        b --;
+        if(line->s[i] == '\n') b -= line->nl_prompt.len;
+        if(b <= 0) break;
+    }
+    assert(b == 0);
+    return i + 1;
+}
+
+bool is_color_reset(char *csi, int len) {
+    len -= 1 + (*csi != '\233');
+    csi += 1 + (*csi != '\233');
+    return len == 1 && *csi == 'm' ||
+           len == 2 && *csi == '0' && csi[1] == 'm';
+}
+
+int tl_text2cont(termline_t *line, int text_byte, color_arr_t *colors) {
+    int newlines = 0;
+    int color_bytes = 0;
+    int color_bytes_skipped = 0;
+    int color_bytes_total = 0;
+    int fi = 0;
+    for(int i = 0; i < text_byte; i ++) {
+        if(line->s[i] == '\n') {
+            newlines ++;
+            if(colors) {
+                for(; fi < colors->len && colors->p[fi].at <= i; fi ++) {
+                    color_bytes += colors->p[fi].len;
+                    if(is_color_reset(colors->p[fi].s, colors->p[fi].len)) color_bytes_skipped = color_bytes;
+                }
+                color_bytes_total += (sizeof TERM_COLOR_RESET - 1) * (color_bytes != color_bytes_skipped);
+                color_bytes_total += color_bytes - color_bytes_skipped;
+            }
+        }
+    }
+    if(colors)
+        for(; fi < colors->len && colors->p[fi].at < text_byte; fi ++) color_bytes += colors->p[fi].len;
+    color_bytes_total += color_bytes;
+    return line->prompt.len + text_byte + newlines * line->nl_prompt.len + color_bytes_total;
+}
+
+void tl_insert(termline_t *line, bool before_cursor, int at, char *s, int len) {
+    str_stretch((str_t*)line, line->len + len);
+    memmove(line->s + at + len, line->s + at, line->len - at);
+    line->len += len;
+    memcpy(line->s + at, s, len);
+    if(line->cursor > at || line->cursor == at && before_cursor) {
+        line->cursor += len;
+        line->magnet = -1;
+    }
+    if(line->mark > at || line->mark == at && before_cursor) {
+        line->mark += len;
+        line->magnet = -1;
+    }
+}
+
+void tl_kill(termline_t *line, int at, int len, bool to_killring) {
+    str_t s = str_substr((str_t*)line, at, len);
+    if(s.len == 0) return;
+    if(to_killring) {
+        str_t s_ = s;
+        str_sovereign(&s_);
+        str_arr_append(&line->killring, &s_, 1);
+        line->kr_idx = -1;
+    }
+    at = s.s - line->s;
+    if(line->cursor > at) line->magnet = -1;
+    if(line->cursor > at && line->cursor <= at + s.len) line->cursor = at;
+    else if(line->cursor > at + s.len) line->cursor -= s.len;
+    if(line->mark > at && line->mark <= at + s.len) line->mark = at;
+    else if(line->mark > at + s.len) line->mark -= s.len;
+    memmove(s.s, s.s + s.len, line->len - at - s.len);
+    line->len -= s.len;
+}
+
+// returns length increment (neg. for dec.)
+int tl_case(termline_t *line, int at, int len, int _case) {
+    str_t s = str_substr((str_t*)line, at, len);
+    int len_ = tu_case_len(s.s, s.len, _case);
+    str_stretch((str_t*)line, line->len + len_ - len);
+    char *_s = s.s;
+    str_sovereign(&s);
+    memmove(_s + len_, _s + s.len, line->s + line->len - _s - s.len);
+    line->len += len_ - len;
+    int ptrs[] = { line->s + line->cursor - _s, line->s + line->mark - _s };
+    tu_case(_s, s.s, s.len, _case, ptrs, 2);
+    line->cursor = _s + ptrs[0] - line->s;
+    line->mark = _s + ptrs[1] - line->s;
+    free(s.s);
+    return len_ - len;
+}
+
+// colors have to be sorted
+void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bool include_prompt) {
+    str_stretch(out, line->len - start + include_prompt * line->prompt.len);
+    out->len = include_prompt * line->prompt.len;
+    if(include_prompt) memcpy(out->s, line->prompt.s, line->prompt.len);
+    int newlines = 0;
+    char *s = line->s;
+    int len = line->len;
+    int fi = 0;
+    int ri = 0;
+    if(colors) {
+        while(fi < colors->len && colors->p[fi].at < start) {
+            if(is_color_reset(colors->p[fi].s, colors->p[fi].len)) ri = fi + 1;
+            fi ++;
+        }
+    }
+    for(int i = start; i < len; i ++) {
+        if(colors) {
+            while(fi < colors->len && colors->p[fi].at == i) {
+                str_append(out, colors->p[fi].s, colors->p[fi].len);
+                if(is_color_reset(colors->p[fi].s, colors->p[fi].len)) ri = fi + 1;
+                fi ++;
+            }
+        }
+        str_append(out, s + i, 1);
+//        out->s[out->len ++] = s[i];
+        if(s[i] == '\n') {
+//            str_stretch(out, len + line->prompt.len + line->nl_prompt.len * newlines + include_prompt * line->prompt.len);
+//            memcpy(out->s + out->len, line->nl_prompt.s, line->nl_prompt.len);
+//            out->len += line->nl_prompt.len;
+            if(colors && ri < fi) str_append_lit(out, TERM_COLOR_RESET);
+            str_append(out, line->nl_prompt.s, line->nl_prompt.len);
+            if(colors)
+                for(int i = ri; i < fi; i ++) str_append(out, colors->p[i].s, colors->p[i].len);
+        }
+    }
+    // todo: callbacks
+}
+
+bool tu_is_wordy(char c, int big) {
+    return ('0' <= c && c <= '9') ||
+           ('A' <= c && c <= 'Z') ||
+           ('a' <= c && c <= 'z') ||
+           c == '_' ||
+           (unsigned char)c >= 0x80 ||
+           (unsigned char)c > 0x20 && c != '\377' && big;
+}
+
+bool tl_input_text(termline_t *line, const content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    int _len = *len;
+    str_t temp = { NULL };
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        if((**inputs).key & NON_CHAR && (**inputs).key != KEY_ENTER && (**inputs).key != KEY_INVALID_CP) break;
+        char c = (**inputs).key != KEY_ENTER ? *(**inputs).s : '\n';
+        tl_lhrec(line, tu_is_wordy(c, false) ? LHREC_INSERT_WORD : LHREC_INSERT_NONWORD, true);
+        str_append(&temp, (**inputs).key != KEY_ENTER ? (**inputs).s : "\n", (**inputs).len);
+    }
+    if(*len != _len) {
+        if(line->cursor < *lowest_change) *lowest_change = line->cursor;
+        tl_insert(line, true, line->cursor, temp.s, temp.len);
+        free(temp.s); return true;
+    }
+    free(temp.s); return false;
+}
+
+int search_back_word(char *s, int byte, bool big) {
+    if(byte == 0) return 0;
+    int got_word = false;
+    for(int i = byte - 1; i >= 0; i --) {
+        if(tu_is_wordy(s[i], big)) got_word = true;
+        else if(got_word) return i + 1;
+    }
+    return 0;
+}
+
+int search_forward_word(char *s, int len, int byte, bool big) {
+    int got_word = false;
+    for(int i = byte; i < len; i ++) {
+        if(tu_is_wordy(s[i], big)) got_word = true;
+        else if(got_word) return i;
+    }
+    return len;
+}
+
+void tl_move_h(termline_t *line, int move) {
+    int _cb = line->cursor;
+    if(move >= 0) {
+        if(line->cursor >= line->len) return;
+        int e;
+        item_boundary(line->s, line->len, line->cursor, NULL, &e, NULL);
+        int b = e, w = 0;
+        while(e < line->len && w == 0) item_boundary(line->s, line->len, e, &b, &e, &w);
+        line->cursor = w == 0 ? e : b;
+    } else {
+        int b = line->cursor, e = line->cursor, w = 0;
+        while(b > 0 && w == 0) item_boundary(line->s, line->len, b - 1, &b, &e, &w);
+        line->cursor = b;
+    }
+    if(line->cursor != _cb) line->magnet = -1;
+}
+
+void tl_move_v(termline_t *line, const content_t *t, int move) {
+    cursor_t cursor = { .byte = tl_text2cont(line, line->cursor, NULL) };
+    cursor_restore(t, &cursor, CURSOR_FROM_BYTE);
+    if(line->magnet < 0) line->magnet = cursor.col;
+    int _row = cursor.row;
+    cursor.row += move;
+    cursor.col = line->magnet;
+    cursor_restore(t, &cursor, CURSOR_FROM_COL);
+    int prompt_len = (cursor.row == 0 ? line->prompt.len : line->nl_prompt.len);
+    if(cursor.row_byte < prompt_len) {
+        cursor.byte += prompt_len - cursor.row_byte;
+    }
+    if(cursor.row == _row) {
+        cursor_restore(t, &cursor, CURSOR_FROM_BYTE);
+        line->magnet = cursor.col;
+    }
+    line->cursor = tl_cont2text(line, cursor.byte);
+}
+
+void tl_move_H(termline_t *line, int move) {
+    if(move >= 0 && (line->cursor >= line->len || line->s[line->cursor] == '\n')) return;
+    if(move < 0 && (line->cursor <= 0 || line->s[line->cursor - 1] == '\n')) return;
+    for(; line->cursor >= 0 && (line->cursor < line->len || move < 0); line->cursor += move)
+        if(line->s[line->cursor] == '\n') break;
+    if(move < 0) line->cursor ++;
+    line->magnet = -1;
+}
+
+//#include <time.h>
+//
+//long _time() {
+//    struct timespec ts;
+//    timespec_get(&ts, TIME_UTC);
+//    return ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+//}
+
+bool tl_input_arrows(termline_t *line, const content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    content_t _t = *t;
+    _t.s = NULL; _t.len = 0; _t.size = 0;
+    int _len = *len;
+    int _cb = line->cursor;
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+        if((k == KEY_UP || k == KEY_DOWN) && _t.s == NULL) tl_compose(line, 0, (str_t*)&_t, NULL, true);
+             if(k == KEY_UP    && (key & MOD_CTRL) == 0) tl_move_v(line, &_t, -1);
+        else if(k == KEY_DOWN  && (key & MOD_CTRL) == 0) tl_move_v(line, &_t, 1);
+        else if(k == KEY_RIGHT && (key & MOD_CTRL) || (k == 'f' || k == 'F') && (key & MOD_ALT)) line->cursor = search_forward_word(line->s, line->len, line->cursor, false);
+        else if(k == KEY_LEFT  && (key & MOD_CTRL) || (k == 'b' || k == 'B') && (key & MOD_ALT)) line->cursor = search_back_word(line->s, line->cursor, false);
+        else if(k == KEY_LEFT  || k == 'B' && (key & MOD_CTRL)) tl_move_h(line, -1);
+        else if(k == KEY_RIGHT || k == 'F' && (key & MOD_CTRL)) tl_move_h(line, 1);
+        else if(k == KEY_HOME  || k == 'A' && (key & MOD_CTRL)) tl_move_H(line, -1);
+        else if(k == KEY_END   || k == 'E' && (key & MOD_CTRL)) tl_move_H(line, 1);
+        else break;
+        if(_cb != line->cursor) line->lhrec_type = LHREC_INIT;
+        if(line->mark_weak) line->mark = -1;
+    }
+    free(_t.s);
+    return *len != _len;
+}
+
+// todo: process Ctrl+J (\n)
+
+bool tl_input_kills(termline_t *line, const content_t *t, int *lowest_change, input_t **inputs, int *l) {
+    int _l = *l;
+    int at = line->cursor, len = 0;
+    for(; *l > 0; (*l) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+//        printf("\r\n[%x]\r\n", key);
+        if((k == 'w' || k == 'W') && (key & MOD_ALT)) {
+            if(line->mark >= 0 & line->mark != line->cursor) {
+                tl_lhrec(line, LHREC_INDEP, true);
+                if(line->mark < at) { tl_kill(line, line->mark, at - line->mark, true); at = line->mark; }
+                if(at + len < line->mark) { tl_kill(line, at + len, line->mark - at - len, true); }
+                line->mark = -1;
+            }
+        } else if(k == 'W' && (key & MOD_CTRL) || k == KEY_BACKSPACE && (key & MOD_ALT)) {
+            if(at > 0) {
+                int i = search_back_word(line->s, at, key == ('W' | MOD_CTRL));
+                tl_lhrec(line, LHREC_INDEP, true);
+                tl_kill(line, i, at - i, true);
+                at = i;
+            }
+        } else if((k == 'd' || k == 'D') && (key & MOD_ALT)) {
+            if(at + len < line->len) {
+                int i = search_forward_word(line->s, line->len, at + len, false);
+                tl_lhrec(line, LHREC_INDEP, true);
+                tl_kill(line, at + len, i - at - len, true);
+            }
+        } else if(k == 'U' && (key & MOD_CTRL)) {
+            if(at > 0) {
+                int i;
+                for(i = at; i --> 0;) if(line->s[i] == '\n') break;
+                i ++;
+                tl_lhrec(line, LHREC_INDEP, true);
+                tl_kill(line, i, at - i, true);
+                at = i;
+            }
+        } else if(k == 'K' && (key & MOD_CTRL)) {
+            if(at + len < line->len && line->s[at + len] != '\n') {
+                int i;
+                for(i = at; i < line->len; i ++) if(line->s[i] == '\n') break;
+                tl_lhrec(line, LHREC_INDEP, true);
+                tl_kill(line, at + len, i - at - len, true);
+            }
+        } else if(k == KEY_DELETE || k == 'D' && (key & MOD_CTRL)) {
+            if(at + len < line->len) {
+                tl_lhrec(line, tu_is_wordy(line->s[at + len], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
+                int e;
+                item_boundary(line->s, line->len, at + len, NULL, &e, NULL);
+                int b = e, w = 0;
+                while(e < line->len && w == 0) item_boundary(line->s, line->len, e, &b, &e, &w);
+                len = (w == 0 ? e : b) - at;
+            }
+        } else if(k == KEY_BACKSPACE || k == 'H' && (key & MOD_CTRL)) {
+            if(at > 0) tl_lhrec(line, tu_is_wordy(line->s[at - 1], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
+            int b = at, e = at, w = 0;
+            while(b > 0 && w == 0) item_boundary(line->s, line->len, b - 1, &b, &e, &w);
+            len += at - b;
+            at = b;
+        } else break;
+    }
+    tl_kill(line, at, len, false);
+    if(*l != _l && line->cursor < *lowest_change) *lowest_change = line->cursor;
+    return *l != _l;
+}
+
+bool tl_input_yanks(termline_t *line, const content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    int _len = *len;
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+        if(k == '@' && (key & MOD_CTRL)) {
+            line->lhrec_type = LHREC_INIT;
+            if(line->mark >= 0 && line->mark < *lowest_change) *lowest_change = line->mark;
+            line->mark = line->cursor >= 0 ? line->cursor : 0;
+            line->mark_weak = false;
+        } else if(k == 'G' && (key & MOD_CTRL)) {
+            line->lhrec_type = LHREC_INIT;
+            line->mark = -1;
+        } else if((k == 'y' || k == 'Y') && (key & MOD_CTRL || key & MOD_ALT)) {
+            if(line->killring.len == 0) goto no_yank;
+            if(line->mark_weak && (key & MOD_ALT) == 0) { line->mark = -1; line->kr_idx = -1; }
+            tl_lhrec(line, LHREC_YANK, true);
+            if(line->kr_idx < 0) line->kr_idx = line->killring.len - 1;
+            str_t y = line->killring.p[line->kr_idx];
+            if(line->mark >= 0) {
+                int b = line->mark > line->cursor ? line->cursor : line->mark;
+                int e = line->mark > line->cursor ? line->mark : line->cursor;
+                str_stretch((str_t*)line, line->len + y.len - (e - b));
+                line->len += y.len - (e - b);
+                if(e < line->len) memmove(line->s + b + y.len, line->s + e, line->len - e);
+                memcpy(line->s + b, y.s, y.len);
+                if(b < *lowest_change) *lowest_change = b;
+                line->mark = b;
+                line->cursor = b + y.len;
+            } else {
+                str_stretch((str_t*)line, line->len + y.len);
+                line->len += y.len;
+                if(line->cursor < line->len) memmove(line->s + line->cursor + y.len, line->s + line->cursor, line->len - line->cursor);
+                memcpy(line->s + line->cursor, y.s, y.len);
+                if(line->cursor < *lowest_change) *lowest_change = line->cursor;
+                line->mark = line->cursor;
+                line->cursor += y.len;
+            }
+            line->kr_idx --;
+            if(line->kr_idx < 0) line->kr_idx = line->killring.len - 1;
+            line->mark_weak = true;
+            no_yank:;
+        } else if((k == 'x' || k == 'X') && (key & MOD_CTRL || key & MOD_ALT)) {
+            line->lhrec_type = LHREC_INIT;
+            if(line->mark < 0) line->mark = (key & MOD_ALT) ? line->len : 0;
+            if(line->mark >= 0) {
+                line->cursor ^= line->mark;
+                line->mark ^= line->cursor;
+                line->cursor ^= line->mark;
+            }
+            line->mark_weak = false;
+        } else if(k == KEY_ESCAPE) {
+            line->lhrec_type = LHREC_INIT;
+            line->mark = -1;
+        } else break;
+    }
+    return *len != _len;
+}
+
+bool tl_input_swaps(termline_t *line, const content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    int _len = *len;
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+        if(k == 'T' && (key & MOD_CTRL)) {
+            if(line->len >= 2) {
+                tl_lhrec(line, LHREC_INDEP, true);
+                int cb = line->cursor;
+                if(cb <= 0) cb = 1;
+                if(cb >= line->len) cb = line->len - 1;
+                line->s[cb] ^= line->s[cb - 1];
+                line->s[cb - 1] ^= line->s[cb];
+                line->s[cb] ^= line->s[cb - 1];
+                line->cursor = cb + 1;
+                if(cb <= *lowest_change) *lowest_change = cb - 1;
+            }
+        } else if((k == 't' || k == 'T') && (key & MOD_ALT)) {
+            int i = search_back_word(line->s, line->cursor, k == 'T');
+            i = search_back_word(line->s, i, k == 'T');
+            int e1 = search_forward_word(line->s, line->len, i, k == 'T');
+            int e2 = search_forward_word(line->s, line->len, e1, k == 'T');
+            int s1 = search_back_word(line->s, e1, k == 'T');
+            int s2 = search_back_word(line->s, e2, k == 'T');
+            if(s2 >= e1) {
+                tl_lhrec(line, LHREC_INDEP, true);
+                char *s = malloc(e2 - s1);
+                memcpy(s, line->s + s2, e2 - s2);
+                memcpy(s + e2 - s2, line->s + e1, s2 - e1);
+                memcpy(s + e2 - e1, line->s + s1, e1 - s1);
+                memcpy(line->s + s1, s, e2 - s1);
+                free(s);
+                if(s1 < *lowest_change) *lowest_change = s1;
+                line->cursor = e2;
+            }
+        } else break;
+    }
+    return *len != _len;
+}
+
+bool tl_input_controls(termline_t *line, content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    int _len = *len;
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+        if(k == 'L' && (key & MOD_CTRL)) {
+            int r = term_check_resize(t->in, t->out, &t->width, &t->height);
+            if(r < 0) t->error = CONT_ERR_GETSIZE;
+            t->resize_pending = true;
+        } else break;
+    }
+    return *len != _len;
+}
+
+bool tl_input_case(termline_t *line, content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    int _len = *len;
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+        if((k == 'c' || k == 'C' || k == 'u' || k == 'U' || k == 'l' || k == 'L') && (key & MOD_ALT)) {
+            tl_lhrec(line, LHREC_INDEP, true);
+            int b = -1, E;
+            if(line->mark >= 0 && line->mark != line->cursor) {
+                b = line->mark > line->cursor ? line->cursor : line->mark;
+                E = line->mark > line->cursor ? line->mark : line->cursor;
+            } else if(line->cursor < line->len) {
+                b = line->cursor;
+                E = search_forward_word(line->s, line->len, line->cursor, false);
+            }
+            if(b >= 0) {
+                int e;
+                utf8_cp_boundary(line->s, line->len, b, &b, &e, NULL);
+                if(k == 'c' || k == 'C') {
+                    int c = tl_case(line, b, e - b, CASE_UPPER);
+                    tl_case(line, e + c, E - e, CASE_LOWER);
+                } else {
+                    tl_case(line, b, E - b, k == 'u' || k == 'U' ? CASE_UPPER : CASE_LOWER);
+                }
+                if(*lowest_change > b) *lowest_change = b;
+            }
+        } else break;
+    }
+    return *len != _len;
+}
+
+bool tl_input_lh(termline_t *line, content_t *t, int *lowest_change, input_t **inputs, int *len) {
+    int _len = *len;
+    int _lh_idx = line->lh_idx;
+    for(; *len > 0; (*len) --, (*inputs) ++) {
+        int key = (**inputs).key;
+        int k = key & NON_MOD;
+        if(k == '_' && (key & MOD_CTRL)) {
+//            printf("\r\n[%i]", line->lh_idx);
+            if(line->lh_idx > 0) {
+                tl_lhrec(line, LHREC_INIT, false);
+                line->lh_idx --;
+            }
+        } else if(k == '^' && (key & MOD_CTRL)) {
+            if(line->lh_idx < line->lh.len - 1) {
+//                printf("\r\n[%i %i %i]\r\n", line->lh_idx, line->lh.len, line->lhrec_type);
+                tl_lhrec(line, LHREC_INIT, false);
+                line->lh_idx ++;
+            }
+        } else break;
+    }
+    if(_lh_idx != line->lh_idx) {
+//        if(line->mark >= 0) tl_kill(line, line->mark > line->cursor ? line->cursor : line->mark, line->mark > line->cursor ? line->mark - line->cursor : line->cursor - line->mark);
+//        line->mark = line->cursor;
+//        tl_insert(line, true, line->cursor, 
+        free(line->s);
+        memcpy(line, line->lh.p + line->lh_idx, sizeof(lhrec_t));
+        str_sovereign((str_t*)line);
+        *lowest_change = 0;
+    }
+    return *len != _len;
+}
+
+int tl_process_input(termline_t *line, content_t *t, input_t *inputs, int len) {
+    int lowest_change = line->len;
+    int _mark = line->mark;
+    int _cb = line->cursor;
+    while(len) {
+             if(tl_input_text(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_kills(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_yanks(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_arrows(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_swaps(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_case(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_controls(line, t, &lowest_change, &inputs, &len));
+        else if(tl_input_lh(line, t, &lowest_change, &inputs, &len));
+        else if(inputs->key == ('C' | MOD_CTRL)) exit(0);
+        else { inputs ++; len --; }
+    }
+    if(line->cursor != _cb || line->mark != _mark) {
+        if(_cb          < lowest_change) lowest_change = _cb;
+        if(line->cursor < lowest_change) lowest_change = line->cursor;
+        if(_mark      >= 0 && _mark      < lowest_change) lowest_change = _mark;
+        if(line->mark >= 0 && line->mark < lowest_change) lowest_change = line->mark;
+    }
+    return lowest_change;
+}
+
+void tl_interact(termline_t *line) {
+    content_t t = content_create(line->in, line->out);
+    color_arr_t colors = { NULL };
+//    color_arr_append(&colors, (color_t[]){
+//            { .s = TERM_COLOR_INVERSE, .len = sizeof TERM_COLOR_INVERSE - 1, .at = 0 },
+//            { .s = TERM_COLOR_RESET, .len = sizeof TERM_COLOR_RESET - 1, .at = 1 }
+//    }, 2);
+    cursor_t cursor = { .byte = line->prompt.len };
+    t.cursor_byte = cursor.byte;
+    content_change(&t, 0, line->prompt.s, line->prompt.len);
+    str_t temp = { .s = NULL, .len = 0, .size = 0 };
+    for(;;) {
+        int x = term_get_pos(stdout, stdin, &t.input_buf).x;
+////        printf("\r\n%i\r\n", x);
+//        printf("\033[9999D\033[20C");
+////        for(int i = 0; i < line->len; i ++) printf("%X ", (unsigned char)line->s[i]);
+//        for(int i = 0; i < t.len; i ++) printf("%X ", (unsigned char)t.s[i]);
+//        printf("\033[9999D\033[%iC", x - 1);
+//        printf("\r\n");
+//        fflush(stdout);
+        content_wait_in(&t);
+        char *s = t.input_buf.s;
+        int len = t.input_buf.len;
+        int i;
+        input_t *inputs = malloc(len * sizeof(input_t));
+        int n = 0;
+        for(i = 0; i < len;) {
+            char *s_ = term_step_input(s + i, len - i, inputs + n);
+            if(s_ == NULL) break;
+            n ++;
+            i = s_ - s;
+        }
+        int _cursor = line->cursor;
+        int lowest_change = tl_process_input(line, &t, inputs, n);
+//        if(lowest_change > _cursor) lowest_change = _cursor;
+        free(inputs);
+        memmove(s, s + i, len - i);
+        t.input_buf.len -= i;
+        colors.len = 0;
+        if(line->mark >= 0 && line->mark != line->cursor) {
+            color_arr_append(&colors, (color_t[]){
+                    { .s = TERM_COLOR_UNDERLINE, .len = sizeof TERM_COLOR_UNDERLINE - 1, .at = line->mark > line->cursor ? line->cursor : line->mark },
+                    { .s = TERM_COLOR_RESET    , .len = sizeof TERM_COLOR_RESET     - 1, .at = line->mark > line->cursor ? line->mark : line->cursor }
+            }, 2);
+        }
+        // todo: color callback
+        color_sort(colors.p, colors.len);
+        temp.len = 0;
+        tl_compose(line, lowest_change, &temp, &colors, false);
+        t.cursor_byte = tl_text2cont(line, line->cursor, &colors);
+        content_change(&t, tl_text2cont(line, lowest_change, &colors), temp.s, temp.len);
+    }
+    ret:
+    free(temp.s);
+}
+

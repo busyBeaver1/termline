@@ -2,13 +2,17 @@
 #include <locale.h>
 
 int main(void) {
-
     setlocale(LC_ALL, "");
     int r = term_set_raw(stdin, stdout);
+    termline_t tl = tl_create(stdin, stdout);
+    tl_set_prompt(&tl, "> ", 2);
+    tl_set_nl_prompt(&tl, ". ", 2);
+    tl_interact(&tl);
+    return 0;
 //    printf("r: %i\r\n", r);
     str_t buf = { .s = NULL, .len = 0, .size = 0 };
-    content_t t = content_create();
-    char *s = "123456789101112131415161718192021222324252627282930\n\n123456789101112131415161718192021222324252627282930123456789101112131415161718192021222324252627282930123456789101112131415161718192021222324252627282930\xF0\x9F\x98\x80";
+    content_t t = content_create(stdin, stdout);
+    char *s = "123456789101112131415161718192021222324252627282930\n\n1234567891011121314151617181920212223242526272829301234567891011121314151617181920212223242526272829301234567891011121314151617181920212223242526272829300\xF0\x9F\x98\x80";
     content_change(&t, 0, s, strlen(s));
     while(t.error == 0) {
         content_wait_in(&t);
