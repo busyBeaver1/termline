@@ -2018,16 +2018,16 @@ bool tl_input_yanks(termline_t *line, const content_t *t, int *lowest_change, in
                 int b = line->mark > line->cursor ? line->cursor : line->mark;
                 int e = line->mark > line->cursor ? line->mark : line->cursor;
                 str_stretch((str_t*)line, line->len + y.len - (e - b));
-                line->len += y.len - (e - b);
                 if(e < line->len) memmove(line->s + b + y.len, line->s + e, line->len - e);
+                line->len += y.len - (e - b);
                 memcpy(line->s + b, y.s, y.len);
                 if(b < *lowest_change) *lowest_change = b;
                 line->mark = b;
                 line->cursor = b + y.len;
             } else {
                 str_stretch((str_t*)line, line->len + y.len);
-                line->len += y.len;
                 if(line->cursor < line->len) memmove(line->s + line->cursor + y.len, line->s + line->cursor, line->len - line->cursor);
+                line->len += y.len;
                 memcpy(line->s + line->cursor, y.s, y.len);
                 if(line->cursor < *lowest_change) *lowest_change = line->cursor;
                 line->mark = line->cursor;
