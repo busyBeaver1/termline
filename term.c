@@ -22,6 +22,9 @@
 #include <stdarg.h>
 #include <inttypes.h>
 
+FILE *debug;
+#define DEBUG(...) do { fprintf(debug, __VA_ARGS__); fflush(debug); } while(0)
+
 #define TU_UNIX    1
 #define TU_WINDOWS 2
 
@@ -274,9 +277,7 @@ int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
     return 1;
 }
 
-void tu_winch_handler(int) {
-    tu_winch = true;
-}
+void tu_winch_handler(int) { tu_winch = true; }
 
 // necessery prep to call term_wait_resize_or_in
 int setup_resize_watch() {
@@ -362,9 +363,7 @@ int tu_gets(FILE *in, char *dst)  {
     return 1;
 }
 
-int tu_fwrite_utf8(char *s, int len, FILE *out) {
-    return fwrite(s, 1, len, out);
-}
+int tu_fwrite_utf8(char *s, int len, FILE *out) { return fwrite(s, 1, len, out); }
 
 #else
 
@@ -1373,6 +1372,7 @@ void content_wait_in(content_t *t) {
 // corrected naturally in this case
 void cursor_restore(const content_t *t, cursor_t *dst, int source) {
     assert(1 <= source && source <= 3);
+//    DEBUG("+\n");
     cursor_t cur = { 0 };
     cursor_t _cur = { 0 };
     pos_t pos = (pos_t){ .x = 1, .y = t->origin, .bouta_wrap = false };
@@ -1391,6 +1391,11 @@ void cursor_restore(const content_t *t, cursor_t *dst, int source) {
         _cur = cur;
         s = tu_step_item(s, t->s + t->len - s, &pos, t->width, t->split_wchars, NULL, NULL, &cur);
     }
+//    DEBUG("%i\n", t->len);
+//    for(int i = 0; i < t->len; i ++) {
+//        DEBUG("%X %c\n", (unsigned char)t->s[i], t->s[i]);
+//    }
+//    DEBUG("-\n");
     *dst = cur;
 }
 
@@ -1491,7 +1496,6 @@ struct termline_s {
     str_t search; // search string
     bool search_success;
 
-
     FILE *in, *out;
     str_t prompt;
     str_t nl_prompt;
@@ -1500,6 +1504,11 @@ struct termline_s {
     int kr_idx;
 
     handler_arr_t handlers;
+
+    void (*user_callback)(struct termline_s* line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed);
+    color_arr_t highlights;
+    str_t hint; // inline hint shown at the cursor; is set to len=0 when in search mode
+    str_t preview; // lone shown at the bottom; just not displayed when in search mode
 };
 
 // go to history entry i and save the current one
@@ -1750,6 +1759,7 @@ bool is_color_reset(char *csi, int len) {
            len == 2 && *csi == '0' && csi[1] == 'm';
 }
 
+// text byte to content byte mapping; does not account for hint
 int tl_text2cont(termline_t *line, int text_byte, color_arr_t *colors) {
     int newlines = 0;
     int color_bytes = 0;
@@ -1842,7 +1852,7 @@ void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bo
             fi ++;
         }
     }
-    for(int i = start; i < len; i ++) {
+    for(int i = start;; i ++) {
         if(colors) {
             while(fi < colors->len && colors->p[fi].at == i) {
                 str_append(out, colors->p[fi].s, colors->p[fi].len);
@@ -1850,20 +1860,20 @@ void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bo
                 fi ++;
             }
         }
+        if(i >= len) break;
+        if(i == line->cursor && include_decorations)
+            str_append(out, line->hint.s, line->hint.len);
         str_append(out, s + i, 1);
-//        out->s[out->len ++] = s[i];
         if(s[i] == '\n') {
-//            str_stretch(out, len + line->prompt.len + line->nl_prompt.len * newlines + include_prompt * line->prompt.len);
-//            memcpy(out->s + out->len, line->nl_prompt.s, line->nl_prompt.len);
-//            out->len += line->nl_prompt.len;
             if(colors && ri < fi) str_append_lit(out, TERM_COLOR_RESET);
             str_append(out, line->nl_prompt.s, line->nl_prompt.len);
             if(colors)
                 for(int i = ri; i < fi; i ++) str_append(out, colors->p[i].s, colors->p[i].len);
         }
     }
-    str_append_lit(out, TERM_COLOR_RESET);
+    if(line->cursor == line->len && include_decorations) str_append(out, line->hint.s, line->hint.len);
     if(!include_decorations) return;
+    str_append_lit(out, TERM_COLOR_RESET);
     if(line->hist_search) {
         if(line->hist_search > 0) str_append_lit(out, "\nforward search: ");
         else                      str_append_lit(out, "\nbackward search: ");
@@ -1871,9 +1881,7 @@ void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bo
         str_append(out, line->search.s, line->search.len);
         if(!line->search_success) str_append_lit(out, TERM_COLOR_RESET);
         str_append_lit(out, "_");
-    } else {
-        // todo: callbacks
-    }
+    } else str_append(out, line->preview.s, line->preview.len);
 }
 
 bool tu_is_wordy(char c, int big) {
@@ -1946,12 +1954,15 @@ void tl_move_v(termline_t *line, const content_t *t, int move) {
     cursor.row += move;
     cursor.col = line->magnet;
     cursor_restore(t, &cursor, CURSOR_FROM_COL);
+//    printf("\r\n%i\r\n", cursor.byte);
     int prompt_len = (cursor.row == 0 ? line->prompt.len : line->nl_prompt.len);
     if(cursor.row_byte < prompt_len) {
         cursor.byte += prompt_len - cursor.row_byte;
     }
     if(cursor.row == _row) {
-        cursor_restore(t, &cursor, CURSOR_FROM_BYTE);
+//        cursor_restore(t, &cursor, CURSOR_FROM_BYTE);
+//    printf("\r\n%i\r\n", cursor.byte);
+//        printf("\r\n[%i] {%.*s}\r\n", t->len, t->len, t->s);
         line->magnet = cursor.col;
     }
     line->cursor = tl_cont2text(line, cursor.byte);
@@ -2150,9 +2161,7 @@ int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t 
     return _len - len;
 }
 
-void tl_unhandle_yanks(termline_t *line, input_t *inputs, int len) {
-    if(line->mark_weak) line->mark = -1;
-}
+void tl_unhandle_yanks(termline_t *line, input_t *inputs, int len) { if(line->mark_weak) line->mark = -1; }
 
 int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
     int _len = len;
@@ -2203,6 +2212,9 @@ int tl_handle_controls(termline_t *line, content_t *t, int *lowest_change, input
             int r = term_check_resize(t->in, t->out, &t->width, &t->height);
             if(r < 0) t->error = CONT_ERR_GETSIZE;
             t->resize_pending = true;
+        } else if(k == 'C' && (key & MOD_CTRL)) {
+            term_unset_raw(line->in, line->out);
+            exit(0); // todo: proper handling
         } else break;
     }
     return _len - len;
@@ -2299,6 +2311,7 @@ int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, input_t *
             if(line->hist_search == 0) line->search.len = 0;
             if(!line->hist_search) tl_lhrec(line, LHREC_INDEP, true);
             line->hist_search = k == 'R' ? -1 : +1;
+            line->hint.len = 0;
             goto do_search;
         } else if(line->hist_search && (key & NON_CHAR) == 0) {
             char c = (char)key;
@@ -2330,12 +2343,12 @@ int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, input_t *
     return _len - len;
 }
 
-void tl_unhandle_hist(termline_t *line, input_t *inputs, int len) {
-    line->hist_search = 0;
-}
+void tl_unhandle_hist(termline_t *line, input_t *inputs, int len) { line->hist_search = 0; }
 
 int tl_process_input(termline_t *line, content_t *t, input_t *inputs, int len) {
     int lowest_change = line->len;
+    int _len = line->len;
+    int _hint_len = line->hint.len;
     int _mark = line->mark;
     int _cb = line->cursor;
     while(len > 0) {
@@ -2351,6 +2364,12 @@ int tl_process_input(termline_t *line, content_t *t, input_t *inputs, int len) {
         }
         inputs += consumed;
         len -= consumed;
+    }
+    bool text_changed = lowest_change != line->len || lowest_change != _len;
+    if(line->user_callback) {
+        if(!line->hist_search) line->user_callback(line, t, &lowest_change, text_changed, line->cursor != _cb);
+        if(line->hint.len && line->cursor < lowest_change) lowest_change = line->cursor;
+        if(_hint_len && _cb < lowest_change) lowest_change = _cb;
     }
     if(line->cursor != _cb || line->mark != _mark) {
         if(_cb          < lowest_change) lowest_change = _cb;
@@ -2421,12 +2440,14 @@ void tl_interact(termline_t *line) {
                     { .s = TERM_COLOR_RESET    , .len = sizeof TERM_COLOR_RESET     - 1, .at = line->mark > line->cursor ? line->mark : line->cursor }
             }, 2);
         }
-        // todo: color callback
+        color_arr_append(&colors, line->highlights.p, line->highlights.len);
         color_sort(colors.p, colors.len);
         temp.len = 0;
         tl_compose(line, lowest_change, &temp, &colors, false, true);
         t.cursor_byte = tl_text2cont(line, line->cursor, &colors);
-        content_change(&t, tl_text2cont(line, lowest_change, &colors), temp.s, temp.len);
+        int at = tl_text2cont(line, lowest_change, &colors);
+        if(lowest_change > line->cursor) at += line->hint.len;
+        content_change(&t, at, temp.s, temp.len);
     }
     ret:
     free(temp.s);

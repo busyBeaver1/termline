@@ -3,7 +3,15 @@
 
 #define STR(lit) (str_t){ .s = lit, .len = sizeof lit - 1 }
 
+void callback(termline_t *line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed) {
+    line->hint.len = 0;
+    if(line->mark < 0)
+        str_append_lit(&line->hint, "\33[2mtest\33[22m");
+}
+
 int main(void) {
+    debug = fopen("debug_pipe", "wb");
+    fprintf(debug, "=== start ===\n"); fflush(debug);
     setlocale(LC_ALL, "");
     int r = term_set_raw(stdin, stdout);
     termline_t tl = tl_create(stdin, stdout);
@@ -12,6 +20,7 @@ int main(void) {
     hist_append(&tl.hist, &(histrec_t){ .s = STR("line 0") }, 1);
     hist_append(&tl.hist, &(histrec_t){ .s = STR("line 1\33[41m") }, 1);
     hist_append(&tl.hist, &(histrec_t){ .s = STR("line 2") }, 1);
+    tl.user_callback = callback;
     tl_interact(&tl);
     return 0;
 //    printf("r: %i\r\n", r);
