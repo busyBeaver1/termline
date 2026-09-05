@@ -1,16 +1,21 @@
 #include "term.c"
 #include <locale.h>
 
+#define STR(lit) (str_t){ .s = lit, .len = sizeof lit - 1 }
+
 int main(void) {
     setlocale(LC_ALL, "");
     int r = term_set_raw(stdin, stdout);
     termline_t tl = tl_create(stdin, stdout);
     tl_set_prompt(&tl, "> ", 2);
     tl_set_nl_prompt(&tl, ". ", 2);
+    hist_append(&tl.hist, &(histrec_t){ .s = STR("line 0") }, 1);
+    hist_append(&tl.hist, &(histrec_t){ .s = STR("line 1\33[41m") }, 1);
+    hist_append(&tl.hist, &(histrec_t){ .s = STR("line 2") }, 1);
     tl_interact(&tl);
     return 0;
 //    printf("r: %i\r\n", r);
-    str_t buf = { .s = NULL, .len = 0, .size = 0 };
+    str_t buf = { .s = NULL, .len = 0, .cap = 0 };
     content_t t = content_create(stdin, stdout);
     char *s = "123456789101112131415161718192021222324252627282930\n\n1234567891011121314151617181920212223242526272829301234567891011121314151617181920212223242526272829301234567891011121314151617181920212223242526272829300\xF0\x9F\x98\x80";
     content_change(&t, 0, s, strlen(s));
@@ -23,7 +28,7 @@ int main(void) {
     //term_set_raw(stdin);
     int w, h;
     wchar_t high_surrogate;
-    str_t s = { .s = NULL, .len = 0, .size = 0 };
+    str_t s = { .s = NULL, .len = 0, .cap = 0 };
     for(;;) {
         s.len = 0;
         int r = term_wait_resize_or_in(stdin, &s, &w, &h, &high_surrogate);
