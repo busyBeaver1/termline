@@ -6,6 +6,7 @@
  *          KEY_*     - non-printable key representations
  *          MOD_*     - key modifier bits (for CTRL/ALT/SHIFT/nompad)
  *          LHREC_*   - inline history (for undo/redo) record types
+ * _-postfixed functions are those with unbeautiful encapsulation boundaries
  */
 
 #define _XOPEN_SOURCE 700 // for wcwidth from wchar.h
@@ -139,9 +140,11 @@ int term_unset_raw(FILE *in, FILE *out) {
 #define TERM_CLEAR_SCREEN_DOWN    "\33[J"
 #define TERM_COLOR_RESET          "\33[0m"
 #define TERM_COLOR_UNDERLINE      "\33[4m"
+#define TERM_COLOR_UNUNDERLINE    "\33[24m"
 #define TERM_COLOR_INVERSE        "\33[7m"
 #define TERM_COLOR_UNINVERSE      "\33[27m"
-#define TERM_COLOR_RED_BACKGROUND "\33[41m"
+#define TERM_COLOR_BACK_RED       "\33[41m"
+#define TERM_COLOR_BACK_DEFAULT   "\33[49m"
 #define TERM_CURSOR_NEWLINE       "\33[B\33[G" // does not push line unlike \r\n
 
 // parse non-negative integer ([0-9]*) from s into x and return pointer to place right after the end of it
@@ -189,6 +192,8 @@ typedef struct {
     int len, cap;
 } str_t;
 
+#define tu_str(lit) (str_t){ .s = lit, .len = sizeof(lit) - 1 }
+
 tu_implement_arr(str_arr, str_t)
 
 void str_stretch(str_t *s, int cap) {
@@ -231,6 +236,7 @@ str_t str_substr(str_t *s, int at, int len) {
     return (str_t){ .s = s->s + at, .len = len, .cap = 0 };
 }
 
+// reallocate, copy into new pointer and forget about the old one
 void str_sovereign(str_t *s) {
     if(s->len == 0) { s->cap = 0; s->s = NULL; return; }
     s->cap = 64;
@@ -548,7 +554,7 @@ pos_t term_get_pos(FILE *out, FILE *in, str_t *input_buf) {
     return term_read_pos(out, in, input_buf);
 }
 
-char *step_utf8_cp(char *_s, int len, uint32_t *cp) {
+char *tu_step_utf8_cp(char *_s, int len, uint32_t *cp) {
     unsigned char *s = (unsigned char*)_s;
     if((*s & 0x80) == 0) {
         if(cp) *cp = (uint32_t)(*s & 0x7F);
@@ -589,14 +595,14 @@ char *step_utf8_cp(char *_s, int len, uint32_t *cp) {
     return _s;
 }
 
-char *step_utf8_cp_partial(char *_s, int len, uint32_t *cp) {
+char *tu_step_utf8_cp_partial(char *_s, int len, uint32_t *cp) {
     unsigned char *s = (unsigned char*)_s;
     char template[4] = "\x00\x80\x80\x80";
     if(*s == 0xE0) template[1] = 0xA0;
     if(*s == 0xF0) template[1] = 0x90;
     memcpy(template, _s, len > 4 ? 4 : len);
-//    printf("\r\n%i {%s} %i %i %i\r\n", len, template, template[0], template[1], step_utf8_cp(template, len, cp) - template);
-    return step_utf8_cp(template, 4, cp) - template + _s;
+//    printf("\r\n%i {%s} %i %i %i\r\n", len, template, template[0], template[1], tu_step_utf8_cp(template, len, cp) - template);
+    return tu_step_utf8_cp(template, 4, cp) - template + _s;
 }
 
 char *write_utf8_cp(char *dst, uint32_t c) {
@@ -776,7 +782,7 @@ int tu_case_len(const char *src, int len, int _case) {
     int l = 0;
     for(const char *s = src; s < src + len;) {
         uint32_t c;
-        char *s_ = step_utf8_cp((char*)s, src + len - s, &c);
+        char *s_ = tu_step_utf8_cp((char*)s, src + len - s, &c);
         if(s_ == s) { s ++; l ++; continue; }
         uint32_x3_t r = tu_case_cp(c, _case);
         for(int i = 0; i < r.len; i ++) {
@@ -798,7 +804,7 @@ int tu_case(char *dst, const char *src, int len, int _case, int *movables, int n
     for(const char *s = src; s < src + len;) {
         char *d = dst;
         uint32_t c;
-        char *s_ = step_utf8_cp((char*)s, src + len - s, &c);
+        char *s_ = tu_step_utf8_cp((char*)s, src + len - s, &c);
         if(s_ == s) { *(dst ++) = *s; s_ ++; goto cnt; }
         uint32_x3_t r = tu_case_cp(c, _case);
         for(int i = 0; i < r.len; i ++) dst = write_utf8_cp(dst, r.s[i]);
@@ -982,7 +988,7 @@ char *tu_step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str
         bytes = 1; goto advanse;
     }
     uint32_t cp;
-    char *s_ = step_utf8_cp(s, len, &cp);
+    char *s_ = tu_step_utf8_cp(s, len, &cp);
     if(s_ == s) {
         if(out) str_append_lit(out, "\xEF\xBF\xBD"); // replacement char �
         bytes = 1; goto advanse;
@@ -1025,14 +1031,15 @@ char *tu_step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str
 
 // get boundaries of a utf8 cp; like tu_item_boundary
 // return as if single char when not a part of a valid cp
-void utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
+void tu_utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
+    assert(0 <= at && at < len);
     if((s[at] & 0x80) == 0) goto single;
     char *b, *e;
     uint32_t c;
-    if(at >= 0)           { b = s + at    ; e = step_utf8_cp(b, len - at    , &c); }
-    if(at >= 1 && b == e) { b = s + at - 1; e = step_utf8_cp(b, len - at + 1, &c); }
-    if(at >= 2 && b == e) { b = s + at - 2; e = step_utf8_cp(b, len - at + 2, &c); }
-    if(at >= 3 && b == e) { b = s + at - 3; e = step_utf8_cp(b, len - at + 3, &c); }
+    if(at >= 0)           { b = s + at    ; e = tu_step_utf8_cp(b, len - at    , &c); }
+    if(at >= 1 && b == e) { b = s + at - 1; e = tu_step_utf8_cp(b, len - at + 1, &c); }
+    if(at >= 2 && b == e) { b = s + at - 2; e = tu_step_utf8_cp(b, len - at + 2, &c); }
+    if(at >= 3 && b == e) { b = s + at - 3; e = tu_step_utf8_cp(b, len - at + 3, &c); }
     if(e > s + at) {
         if(begin) *begin = b - s; if(end) *end = e - s;
         #if TU_SYSTEM == TU_WINDOWS
@@ -1067,13 +1074,13 @@ void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width
         if(end) *end = i + 1;
         // backwards check
         for(i = csi_test; i >= 0; i --) if((s[i] < '0' || s[i] > '9') && s[i] != ';') break;
-        int b;
+        int b = -1;
         if(i >= 1 && s[i] == '[' && s[i - 1] == '\33') { b = i - 1; goto csi; } // \e[ SCI
         if(i >= 1 && s[i] == '\233' && s[i - 1] == '\302') { b = i - 1; goto csi; } // csi char \x9B in utf8
         if(i >= 0 && s[i] == '\233') b = i; // csi char \x9B raw
         if(b > 0) { // testing that raw \x9B is not a part of a cp
             int _e;
-            utf8_cp_boundary(s, len, b - 1, NULL, &_e, NULL);
+            tu_utf8_cp_boundary(s, len, b - 1, NULL, &_e, NULL);
             if(_e != b) goto no_csi;
         } else goto no_csi;
         csi:
@@ -1082,8 +1089,7 @@ void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width
         return;
     }
     no_csi:
-    utf8_cp_boundary(s, len, at, begin, end, width);
-//    if(ii) { printf("\r\n{%i %i %i %i}\r\n", *begin, *end, at, len); exit(0); }
+    tu_utf8_cp_boundary(s, len, at, begin, end, width);
 }
 
 // how to find the origin after a window resize
@@ -1167,7 +1173,7 @@ content_t content_create(FILE *in, FILE *out) {
 // render the content starting at byte `start`
 // refuses to write to terminal if the window has been resized (tu_winch on unix or cap change on windows)
 // in this case t->resize_pending is set and one should first call content_resize
-void content_render_from(content_t *t, int start) {
+void content_render_from(content_t *t, int start, bool extra_overwrite) {
     if(t->error || t->resize_pending) return;
     assert(0 <= start && start <= t->len);
     if(t->origin < 1) { t->origin = 1; start = 0; }
@@ -1196,7 +1202,12 @@ void content_render_from(content_t *t, int start) {
             if(!pos.bouta_wrap) { _pos = pos; _cs_len = cs.len; _s = s; } // saving pre-bouta_wrap situation 'cause restoring bouta_wrap flag with TERM_CURSOR_TO is impossible
             if(s >= t->s + start) break;
         }
-        pos = __pos; cs.len = __cs_len; s = __s;
+        if(extra_overwrite) { pos = __pos; cs.len = __cs_len; s = __s; }
+        else                { pos = _pos; cs.len = _cs_len; s = _s; }
+        if(s >= t->s + t->len) {
+            if(t->cursor_byte < 0) str_append_lit(&out, TERM_CURSOR_HIDE);
+            goto move_cursor;
+        }
         str_append_lit(&out, TERM_COLOR_RESET TERM_CURSOR_HIDE);
         str_printf(&out, TERM_CURSOR_TO, pos.y, pos.x);
         str_append(&out, cs.s, cs.len);
@@ -1223,6 +1234,7 @@ void content_render_from(content_t *t, int start) {
     }
     //str_printf(&out, TERM_CURSOR_TO TERM_CURSOR_SAVE, t->origin >= 1 ? t->origin : 1, 1);
     //str_printf(&out, TERM_CURSOR_TO "[]", t->origin >= 1 ? t->origin : 1, 1);
+    move_cursor:
     if(t->cursor_byte >= 0) {
         if(wrap_after_cur && cur.bouta_wrap)
             { cur.x = 0; cur.y ++; cur.bouta_wrap = false; }
@@ -1249,6 +1261,7 @@ void content_change(content_t *t, int start, const char *cont, int len) {
     assert(0 <= start && start <= t->len);
     assert(len >= 0);
     if(t->error) return;
+    int _t_len = t->len;
     bool item_cut = false; // if we are _possibly_ cutting an item
     int b = start;
     if(start > 0) {
@@ -1264,8 +1277,8 @@ void content_change(content_t *t, int start, const char *cont, int len) {
         tu_item_boundary(t->s, t->len, start - 1, &b, &e, NULL);
         if(e == start) b = start;
     }
-//    if(item_cut) printf("\r\n=========================\r\n");
-    content_render_from(t, b);
+//    printf("\r\n=========================\r\n");
+    content_render_from(t, b, len != 0 || start != _t_len);
 }
 
 // todo: watch over content error from tl
@@ -1337,7 +1350,7 @@ void content_resize(content_t *t) {
             t->origin = pos.y - p.y - p.bouta_wrap;
         }
     }
-    content_render_from(t, 0);
+    content_render_from(t, 0, true);
 }
 
 // wait for data received on t->in, handling window resizes
@@ -1412,13 +1425,15 @@ tu_implement_arr(lhrec_arr, lhrec_t)
 typedef struct {
     char *s;
     int len, cap;
-    int at; // before which byte to put it
-    int prio; // smaller go first; non-negative only
+    unsigned int at; // before which byte to put it
+    unsigned int prio; // smaller go first; non-negative only
 } color_t;
 
-#define TU_INT_HIGH_BIT (~((unsigned int)(-1) >> 1) >> 1)
+#define tu_color(lit, _at, _prio) (color_t){ .s = lit, .len = sizeof(lit) - 1, .at = _at, .prio = _prio }
 
-void color_sort_(color_t *begin, color_t *end, int bit, int level) {
+#define TU_UINT_HIGH_BIT (~((unsigned int)(-1) >> 1))
+
+void color_sort_(color_t *begin, color_t *end, unsigned int bit, int level) {
     color_t *_begin = begin;
     color_t *_end = end;
     while(begin < end) {
@@ -1427,18 +1442,18 @@ void color_sort_(color_t *begin, color_t *end, int bit, int level) {
         color_t temp = *begin; *begin = *end; *end = temp;
     }
     color_t *mid = begin + (((level ? begin->prio : begin->at) & bit) == 0);
-    int bit_ = bit >> 1;
+    unsigned int bit_ = bit >> 1;
     int level_ = level;
     if(bit_ == 0) {
         if(level) return;
-        bit_ = TU_INT_HIGH_BIT;
+        bit_ = TU_UINT_HIGH_BIT;
         level_ ++;
     }
     if(mid - _begin >= 2) color_sort_(_begin, mid - 1, bit_, level_);
     if(_end - mid >= 1) color_sort_(mid, _end, bit_, level_);
 }
 
-void color_sort(color_t *f, int len) { if(len >= 2) color_sort_(f, f + len - 1, TU_INT_HIGH_BIT, 0); }
+void color_sort(color_t *f, int len) { if(len >= 2) color_sort_(f, f + len - 1, TU_UINT_HIGH_BIT, 0); }
 
 tu_implement_arr(color_arr, color_t)
 
@@ -1452,17 +1467,18 @@ typedef struct {
 
 typedef struct termline_s termline_t;
 
-// input handlers; called sequentially each consumes/handles some number of keystrokes/inputs; when no handler consumes an input, it is discarded
-// when a number of inputs is consumed by a different handler or an input is discarded and unhandle is defined, it is called on that
+// input handlers; called sequentially; each consumes/handles some number of keystrokes/inputs; when no handler consumes an input, it is discarded
+// when a number of inputs is consumed by a different handler [than this one] or an input is discarded, and unhandle [this one] is defined, it is called on those inputs
 typedef struct {
     // - line: the termline to make changes upon
     // - t: for reference only; the content currently displayed
     // - lowest_change: write the lowest byte you've altered in line->s here, if it's lower than the current value of *lowest_change
-    // - inputs: the keystrokes to handle; the handler should consume a numer of keystrokes that are of kind this handler cares about
-    // - len: the numer of inputs
-    // returns: the number of inputs handled
-    int (*handle)(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len);
-    void (*unhandle)(termline_t *line, input_t *inputs, int len);
+    // - inputs: the keystrokes to handle; the handler should consume a numer of consecative keystrokes starting at index 0 that are of the kind this handler cares about
+    // - len: the numer of inputs available
+    // returns: the number of inputs handled/consumed
+    int (*handle)(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len); // not nullable
+
+    void (*unhandle)(termline_t *line, input_t *inputs, int len); // nullable
 } handler_t;
 
 tu_implement_arr(handler_arr, handler_t)
@@ -1473,6 +1489,14 @@ typedef struct {
 } histrec_t;
 
 tu_implement_arr(hist, histrec_t)
+
+typedef struct {
+    char *s;
+    int len, cap;
+    int ignored;
+} tab_t;
+
+tu_implement_arr(tab_arr, tab_t)
 
 struct termline_s {
     char *s; // the entered text
@@ -1505,10 +1529,20 @@ struct termline_s {
 
     handler_arr_t handlers;
 
-    void (*user_callback)(struct termline_s* line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed);
+    tab_arr_t tab_compls;
+    int tab_option;
+
+    void (*tab_callback)(struct termline_s* line, const input_t *tab);
+
+    int (*callback)(struct termline_s* line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed);
     color_arr_t highlights;
     str_t hint; // inline hint shown at the cursor; is set to len=0 when in search mode
     str_t preview; // lone shown at the bottom; just not displayed when in search mode
+
+    str_t selection_begin, selection_end; // how to highlight selection; should be ANI CSs, \e\[[0-9;]*m
+    int selection_prio; // priority of selection colors
+    int reselection_prio; // priority of reintroducing selection_begin after a user's color reset (\e[0m or \e[m) within the selection
+    int hint_prio; // priority of hint string relative to colors
 };
 
 // go to history entry i and save the current one
@@ -1540,6 +1574,12 @@ void tl_set_nl_prompt(termline_t *line, const char *s, int len) {
     str_append(&line->nl_prompt, s, len);
 }
 
+void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignred_part) {
+    tab_t compl = { NULL, .ignored = ignred_part };
+    str_append((str_t*)&compl, s, len);
+    tab_arr_append(&line->tab_compls, &compl, 1);
+}
+
 // types of modifications an lhrec could be saved after
 #define LHREC_INIT           0
 #define LHREC_INSERT_WORD    1
@@ -1548,7 +1588,8 @@ void tl_set_nl_prompt(termline_t *line, const char *s, int len) {
 #define LHREC_KILL_NONWORD   4
 #define LHREC_YANK           5
 #define LHREC_HIST           6
-#define LHREC_INDEP          7
+#define LHREC_TAB            7
+#define LHREC_INDEP          8
 
 void tl_lhrec(termline_t *line, int type, bool advanse) {
     if(line->lhrec_type != type || type == LHREC_INDEP) {
@@ -1605,6 +1646,7 @@ void tl_lhrec(termline_t *line, int type, bool advanse) {
 #define KEY_ENTER          0x200100
 #define KEY_BACKSPACE      0x200101
 #define KEY_ESCAPE         0x200102
+#define KEY_TAB            0x200103
 #define KEY_UP             0x200201
 #define KEY_DOWN           0x200202
 #define KEY_RIGHT          0x200203
@@ -1710,7 +1752,7 @@ char *tu_step_input(char *s, int len, input_t *in) {
     bool esc = *s == '\33';
     s += esc; len -= esc;
     if(len == 0) return NULL;
-    char *s_ = step_utf8_cp_partial(s, len, &in->c);
+    char *s_ = tu_step_utf8_cp_partial(s, len, &in->c);
 //    printf("\r\n[%i]", s_ - s);
     if(s_ > s + len) return NULL;
     in->s = s;
@@ -1724,9 +1766,10 @@ char *tu_step_input(char *s, int len, input_t *in) {
     }
 //    if((in->c < 0x20 || in->c == 127) && esc) goto esc;
     if((in->c == '\33') && esc) goto esc;
-    if(in->c == '\r') in->key = KEY_ENTER;
+         if(in->c == '\r') in->key = KEY_ENTER;
+    else if(in->c == '\10') in->key = KEY_BACKSPACE | MOD_CTRL;
+    else if(in->c == '\11') in->key = KEY_TAB;
     else if(in->c == '\33') in->key = KEY_ESCAPE;
-    else if(in->c == '\010') in->key = KEY_BACKSPACE | MOD_CTRL;
     else if(in->c < 0x20) in->key = (in->c + '@') | MOD_CTRL;
     else if(in->c == '\177') in->key = KEY_BACKSPACE;
     else in->key = in->c;
@@ -1759,7 +1802,10 @@ bool is_color_reset(char *csi, int len) {
            len == 2 && *csi == '0' && csi[1] == 'm';
 }
 
-// text byte to content byte mapping; does not account for hint
+// translate text byte position into content byte position
+// colors are accounted for when provided (non NULL)
+// a color with at=n goes between bytes n-1 and n, but with text_byte=n it is not accounted for
+// i.e. colors are "coupled" with bytes their `at`s point to
 int tl_text2cont(termline_t *line, int text_byte, color_arr_t *colors) {
     int newlines = 0;
     int color_bytes = 0;
@@ -1782,7 +1828,7 @@ int tl_text2cont(termline_t *line, int text_byte, color_arr_t *colors) {
     if(colors)
         for(; fi < colors->len && colors->p[fi].at < text_byte; fi ++) color_bytes += colors->p[fi].len;
     color_bytes_total += color_bytes;
-    return line->prompt.len + text_byte + newlines * line->nl_prompt.len + color_bytes_total;
+    return line->prompt.len + text_byte + newlines * line->nl_prompt.len + color_bytes_total + (text_byte > line->cursor) * line->hint.len;
 }
 
 void tl_insert(termline_t *line, bool before_cursor, int at, char *s, int len) {
@@ -1853,16 +1899,21 @@ void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bo
         }
     }
     for(int i = start;; i ++) {
+        bool hint_included = false;
         if(colors) {
             while(fi < colors->len && colors->p[fi].at == i) {
+                if(i == line->cursor && colors->p[fi].prio >= line->hint_prio && !hint_included && include_decorations) {
+                    str_append(out, line->hint.s, line->hint.len);
+                    hint_included = true;
+                }
                 str_append(out, colors->p[fi].s, colors->p[fi].len);
                 if(is_color_reset(colors->p[fi].s, colors->p[fi].len)) ri = fi + 1;
                 fi ++;
             }
         }
-        if(i >= len) break;
-        if(i == line->cursor && include_decorations)
+        if(i == line->cursor && !hint_included && include_decorations)
             str_append(out, line->hint.s, line->hint.len);
+        if(i >= len) break;
         str_append(out, s + i, 1);
         if(s[i] == '\n') {
             if(colors && ri < fi) str_append_lit(out, TERM_COLOR_RESET);
@@ -1871,16 +1922,22 @@ void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bo
                 for(int i = ri; i < fi; i ++) str_append(out, colors->p[i].s, colors->p[i].len);
         }
     }
-    if(line->cursor == line->len && include_decorations) str_append(out, line->hint.s, line->hint.len);
+    if(ri != fi) str_append_lit(out, TERM_COLOR_RESET);
     if(!include_decorations) return;
-    str_append_lit(out, TERM_COLOR_RESET);
     if(line->hist_search) {
         if(line->hist_search > 0) str_append_lit(out, "\nforward search: ");
         else                      str_append_lit(out, "\nbackward search: ");
-        if(!line->search_success) str_append_lit(out, TERM_COLOR_RED_BACKGROUND);
+        if(!line->search_success) str_append_lit(out, TERM_COLOR_BACK_RED);
         str_append(out, line->search.s, line->search.len);
         if(!line->search_success) str_append_lit(out, TERM_COLOR_RESET);
         str_append_lit(out, "_");
+    } else if(line->tab_compls.len) {
+        for(int i = 0; i < line->tab_compls.len; i ++) {
+            str_append(out, i ? " " : "\n", 1);
+            if(i == line->tab_option) str_append_lit(out, TERM_COLOR_INVERSE);
+            str_append(out, line->tab_compls.p[i].s, line->tab_compls.p[i].len);
+            if(i == line->tab_option) str_append_lit(out, TERM_COLOR_RESET);
+        }
     } else str_append(out, line->preview.s, line->preview.len);
 }
 
@@ -1947,6 +2004,7 @@ void tl_move_h(termline_t *line, int move) {
 }
 
 void tl_move_v(termline_t *line, const content_t *t, int move) {
+    int _cb = line->cursor;
     cursor_t cursor = { .byte = tl_text2cont(line, line->cursor, NULL) };
     cursor_restore(t, &cursor, CURSOR_FROM_BYTE);
     if(line->magnet < 0) line->magnet = cursor.col;
@@ -1959,18 +2017,14 @@ void tl_move_v(termline_t *line, const content_t *t, int move) {
     if(cursor.row_byte < prompt_len) {
         cursor.byte += prompt_len - cursor.row_byte;
     }
-    if(cursor.row == _row) {
-//        cursor_restore(t, &cursor, CURSOR_FROM_BYTE);
-//    printf("\r\n%i\r\n", cursor.byte);
-//        printf("\r\n[%i] {%.*s}\r\n", t->len, t->len, t->s);
-        line->magnet = cursor.col;
-    }
     line->cursor = tl_cont2text(line, cursor.byte);
+    if(cursor.row == _row && line->cursor != _cb) line->magnet = cursor.col;
 }
 
 void tl_move_H(termline_t *line, int move) {
     if(move >= 0 && (line->cursor >= line->len || line->s[line->cursor] == '\n')) return;
     if(move < 0 && (line->cursor <= 0 || line->s[line->cursor - 1] == '\n')) return;
+    if(move < 0) line->cursor --;
     for(; line->cursor >= 0 && (line->cursor < line->len || move < 0); line->cursor += move)
         if(line->s[line->cursor] == '\n') break;
     if(move < 0) line->cursor ++;
@@ -2002,7 +2056,7 @@ int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, input_t
                 while(e < line->len) {
                     tu_item_boundary(line->s, line->len, e, &b, &e, NULL);
                     uint32_t cp;
-                    char *cp_e = step_utf8_cp(line->s + b, line->len - b, &cp);
+                    char *cp_e = tu_step_utf8_cp(line->s + b, line->len - b, &cp);
                     if(cp_e == line->s + e && cp == key) { line->cursor = b; break; }
                 }
             }
@@ -2012,7 +2066,7 @@ int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, input_t
                 while(b > 0) {
                     tu_item_boundary(line->s, line->len, b - 1, &b, &e, NULL);
                     uint32_t cp;
-                    char *cp_e = step_utf8_cp(line->s + b, line->len - b, &cp);
+                    char *cp_e = tu_step_utf8_cp(line->s + b, line->len - b, &cp);
                     if(cp_e == line->s + e && cp == key) { line->cursor = b; break; }
                 }
             }
@@ -2102,6 +2156,30 @@ int tl_handle_kills(termline_t *line, content_t *t, int *lowest_change, input_t 
     return _len - len;
 }
 
+// pastes at cursor or replacing selection, leaving weak selection
+void tl_paste_(termline_t *line, int *lowest_change, char *s, int len) {
+    if(line->mark >= 0) {
+        int b = line->mark > line->cursor ? line->cursor : line->mark;
+        int e = line->mark > line->cursor ? line->mark : line->cursor;
+        str_stretch((str_t*)line, line->len + len - (e - b));
+        if(e < line->len) memmove(line->s + b + len, line->s + e, line->len - e);
+        line->len += len - (e - b);
+        memcpy(line->s + b, s, len);
+        if(b < *lowest_change) *lowest_change = b;
+        line->mark = b;
+        line->cursor = b + len;
+    } else {
+        str_stretch((str_t*)line, line->len + len);
+        if(line->cursor < line->len) memmove(line->s + line->cursor + len, line->s + line->cursor, line->len - line->cursor);
+        line->len += len;
+        memcpy(line->s + line->cursor, s, len);
+        if(line->cursor < *lowest_change) *lowest_change = line->cursor;
+        line->mark = line->cursor;
+        line->cursor += len;
+    }
+    line->mark_weak = true;
+}
+
 int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
@@ -2112,7 +2190,7 @@ int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t 
             if(line->mark >= 0 && line->mark < *lowest_change) *lowest_change = line->mark;
             line->mark = line->cursor >= 0 ? line->cursor : 0;
             line->mark_weak = false;
-        } else if(k == 'G' && (key & MOD_CTRL)) {
+        } else if(k == KEY_ESCAPE || k == 'G' && (key & MOD_CTRL)) {
             line->lhrec_type = LHREC_INIT;
             line->mark = -1;
         } else if((k == 'y' || k == 'Y') && (key & MOD_CTRL || key & MOD_ALT)) {
@@ -2121,28 +2199,9 @@ int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t 
             tl_lhrec(line, LHREC_YANK, true);
             if(line->kr_idx < 0) line->kr_idx = line->killring.len - 1;
             str_t y = line->killring.p[line->kr_idx];
-            if(line->mark >= 0) {
-                int b = line->mark > line->cursor ? line->cursor : line->mark;
-                int e = line->mark > line->cursor ? line->mark : line->cursor;
-                str_stretch((str_t*)line, line->len + y.len - (e - b));
-                if(e < line->len) memmove(line->s + b + y.len, line->s + e, line->len - e);
-                line->len += y.len - (e - b);
-                memcpy(line->s + b, y.s, y.len);
-                if(b < *lowest_change) *lowest_change = b;
-                line->mark = b;
-                line->cursor = b + y.len;
-            } else {
-                str_stretch((str_t*)line, line->len + y.len);
-                if(line->cursor < line->len) memmove(line->s + line->cursor + y.len, line->s + line->cursor, line->len - line->cursor);
-                line->len += y.len;
-                memcpy(line->s + line->cursor, y.s, y.len);
-                if(line->cursor < *lowest_change) *lowest_change = line->cursor;
-                line->mark = line->cursor;
-                line->cursor += y.len;
-            }
+            tl_paste_(line, lowest_change, y.s, y.len);
             line->kr_idx --;
             if(line->kr_idx < 0) line->kr_idx = line->killring.len - 1;
-            line->mark_weak = true;
             no_yank:;
         } else if((k == 'x' || k == 'X') && (key & MOD_CTRL || key & MOD_ALT)) {
             line->lhrec_type = LHREC_INIT;
@@ -2153,15 +2212,22 @@ int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t 
                 line->cursor ^= line->mark;
             }
             line->mark_weak = false;
-        } else if(k == KEY_ESCAPE) {
-            line->lhrec_type = LHREC_INIT;
-            line->mark = -1;
         } else break;
     }
     return _len - len;
 }
 
-void tl_unhandle_yanks(termline_t *line, input_t *inputs, int len) { if(line->mark_weak) line->mark = -1; }
+void tl_unhandle_yanks(termline_t *line, input_t *inputs, int len) {
+    for(int i = 0; i < len; i ++) {
+        uint32_t key = inputs[i].key;
+        uint32_t k = key & NON_MOD;
+             if(k == 'L' && (key & MOD_CTRL)); // ingnore rerender
+        else if(k == '_' && (key & MOD_CTRL)); // ignore undo
+        else if(k == '^' && (key & MOD_CTRL)); // ignore redo
+        else if(k == KEY_TAB); // ignore tabs
+        else if(line->mark_weak) line->mark = -1;
+    }
+}
 
 int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
     int _len = len;
@@ -2237,7 +2303,7 @@ int tl_handle_case(termline_t *line, content_t *t, int *lowest_change, input_t *
             }
             if(b >= 0) {
                 int e;
-                utf8_cp_boundary(line->s, line->len, b, &b, &e, NULL);
+                tu_utf8_cp_boundary(line->s, line->len, b, &b, &e, NULL);
                 if(k == 'c' || k == 'C') {
                     int c = tl_case(line, b, e - b, CASE_UPPER);
                     tl_case(line, e + c, E - e, CASE_LOWER);
@@ -2267,6 +2333,7 @@ int tl_handle_lh(termline_t *line, content_t *t, int *lowest_change, input_t *in
             if(line->lh_idx < line->lh.len - 1) {
 //                printf("\r\n[%i %i %i]\r\n", line->lh_idx, line->lh.len, line->lhrec_type);
                 tl_lhrec(line, LHREC_INIT, false);
+                DEBUG("%i\n", line->mark);
                 line->lh_idx ++;
             }
         } else break;
@@ -2343,19 +2410,76 @@ int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, input_t *
     return _len - len;
 }
 
-void tl_unhandle_hist(termline_t *line, input_t *inputs, int len) { line->hist_search = 0; }
+void tl_unhandle_hist(termline_t *line, input_t *inputs, int len) {
+    for(int i = 0; i < len; i ++) {
+        uint32_t key = inputs[i].key;
+        uint32_t k = key & NON_MOD;
+        if(k == 'L' && (key & MOD_CTRL)); // ingnore rerender
+        else line->hist_search = 0;
+    }
+}
+
+int tl_handle_tabs(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+    int _len = len;
+    for(; len > 0; len --, inputs ++) {
+        uint32_t key = inputs->key;
+        uint32_t k = key & NON_MOD;
+        if(k == KEY_TAB) {
+            if(line->tab_compls.len) {
+                if(line->tab_option < 0) line->mark = -1;
+                if(++ line->tab_option >= line->tab_compls.len) line->tab_option = 0;
+                tab_t y = line->tab_compls.p[line->tab_option];
+                tl_paste_(line, lowest_change, y.s + y.ignored, y.len - y.ignored);
+            } else if(line->tab_callback) {
+                line->tab_callback(line, inputs);
+                if(line->tab_compls.len) tl_lhrec(line, LHREC_TAB, true);
+                if(line->tab_compls.len > 1) {
+                    line->tab_option = -1;
+                } else if(line->tab_compls.len == 1) {
+                    char *s = line->tab_compls.p[0].s + line->tab_compls.p[0].ignored;
+                    int len = line->tab_compls.p[0].len - line->tab_compls.p[0].ignored;
+                    str_stretch((str_t*)line, line->len + len);
+                    if(line->cursor < line->len)
+                        memmove(line->s + line->cursor + len, line->s + line->cursor, line->len - line->cursor);
+                    memcpy(line->s + line->cursor, s, len);
+                    line->len += len;
+                    if(line->mark >= line->cursor) line->mark += len;
+                    line->cursor += len;
+                    free(line->tab_compls.p[0].s);
+                    line->tab_compls.len = 0;
+                }
+            }
+        } else break;
+    }
+    return _len - len;
+}
+
+void tl_unhandle_tabs(termline_t *line, input_t *inputs, int len) {
+    for(int i = 0; i < len; i ++) {
+        uint32_t key = inputs[i].key;
+        uint32_t k = key & NON_MOD;
+        if(k == 'L' && (key & MOD_CTRL)); // ingnore rerender
+        else {
+            for(int i = 0; i < line->tab_compls.len; i ++) free(line->tab_compls.p[i].s);
+            line->tab_compls.len = 0;
+        }
+    }
+}
 
 int tl_process_input(termline_t *line, content_t *t, input_t *inputs, int len) {
+    bool _normal_mode = !line->hist_search && !line->tab_compls.len;
     int lowest_change = line->len;
     int _len = line->len;
     int _hint_len = line->hint.len;
     int _mark = line->mark;
+    bool _selected = line->mark >= 0 && line->mark != line->cursor;
     int _cb = line->cursor;
     while(len > 0) {
         int consumed = 0;
         int by = -1;
         for(int i = 0; i < line->handlers.len; i ++) {
             consumed = line->handlers.p[i].handle(line, t, &lowest_change, inputs, len);
+//            DEBUG("%i %i\n", i, lowest_change);
             if(consumed) { by = i; break; }
         }
         if(consumed == 0) consumed = 1;
@@ -2366,18 +2490,27 @@ int tl_process_input(termline_t *line, content_t *t, input_t *inputs, int len) {
         len -= consumed;
     }
     bool text_changed = lowest_change != line->len || lowest_change != _len;
-    if(line->user_callback) {
-        if(!line->hist_search) line->user_callback(line, t, &lowest_change, text_changed, line->cursor != _cb);
-        if(line->hint.len && line->cursor < lowest_change) lowest_change = line->cursor;
-        if(_hint_len && _cb < lowest_change) lowest_change = _cb;
+    int r = 0;
+    if(line->callback && !line->hist_search) {
+        r = line->callback(line, t, &lowest_change, text_changed, line->cursor != _cb);
     }
-    if(line->cursor != _cb || line->mark != _mark) {
-        if(_cb          < lowest_change) lowest_change = _cb;
-        if(line->cursor < lowest_change) lowest_change = line->cursor;
-        if(_mark      >= 0 && _mark      < lowest_change) lowest_change = _mark;
-        if(line->mark >= 0 && line->mark < lowest_change) lowest_change = line->mark;
+    bool hint_changed = r >= 2 || line->hint.len && _cb != line->cursor;
+    if(hint_changed && line->hint.len && line->cursor < lowest_change) lowest_change = line->cursor;
+    if(hint_changed && _hint_len      && _cb          < lowest_change) lowest_change = _cb;
+    bool selected = line->mark >= 0 && line->mark != line->cursor;
+//    DEBUG("before: %i\n", lowest_change);
+    if(line->cursor != _cb || selected != _selected) {
+        if( selected && line->cursor < lowest_change) lowest_change = line->cursor;
+        if(_selected && _cb          < lowest_change) lowest_change = _cb;
     }
-    return lowest_change;
+//    DEBUG("mid: %i\n", lowest_change);
+    if(line->mark != _mark || selected != _selected) {
+        if( selected && line->mark < lowest_change) lowest_change = line->mark;
+        if(_selected && _mark      < lowest_change) lowest_change = _mark;
+    }
+//    DEBUG("after: %i\n", lowest_change);
+    bool normal_mode = !line->hist_search && !line->tab_compls.len;
+    return normal_mode && _normal_mode && !hint_changed && lowest_change == _len && lowest_change == line->len && r == 0 ? -1 : lowest_change;
 }
 
 termline_t tl_create(FILE *in, FILE *out) {
@@ -2385,35 +2518,42 @@ termline_t tl_create(FILE *in, FILE *out) {
         .in = in,
         .out = out,
         .mark = -1,
-        .kr_idx = -1
+        .kr_idx = -1,
+        .selection_begin = tu_str(TERM_COLOR_UNDERLINE),
+        .selection_end = tu_str(TERM_COLOR_UNUNDERLINE),
+        .selection_prio = 256,
+        .reselection_prio = 1024,
+        .hint_prio = 4096
     };
+    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_controls }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_hist, .unhandle = tl_unhandle_hist }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_lh }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_case }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_controls }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_swaps }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_yanks, .unhandle = tl_unhandle_yanks }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_kills }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_arrows }, 1);
     handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_text }, 1);
+    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_tabs, .unhandle = tl_unhandle_tabs }, 1);
     return line;
 }
 
 void tl_interact(termline_t *line) {
+    term_set_raw(line->in, line->out); // todo: proper control
     content_t t = content_create(line->in, line->out);
     color_arr_t colors = { NULL };
+    color_arr_t _colors = { NULL };
     cursor_t cursor = { .byte = line->prompt.len };
     t.cursor_byte = cursor.byte;
     content_change(&t, 0, line->prompt.s, line->prompt.len);
     str_t temp = { .s = NULL, .len = 0, .cap = 0 };
     for(;;) {
-        int x = term_get_pos(stdout, stdin, &t.input_buf).x;
+//        int x = term_get_pos(stdout, stdin, &t.input_buf).x;
 ////        printf("\r\n%i\r\n", x);
 //        printf("\33[9999D\33[20C");
 ////        for(int i = 0; i < line->len; i ++) printf("%X ", (unsigned char)line->s[i]);
-//        for(int i = 0; i < t.len; i ++) printf("%X ", (unsigned char)t.s[i]);
+//        for(int i = 0; i < t.len; i ++) { if(t.s[i] >= 0x20) printf("%c", t.s[i]); else printf("{%X}", (unsigned char)t.s[i]); }
 //        printf("\33[9999D\33[%iC", x - 1);
-//        printf("\r\n");
 //        fflush(stdout);
         content_wait_in(&t);
         char *s = t.input_buf.s;
@@ -2429,24 +2569,42 @@ void tl_interact(termline_t *line) {
         }
         int _cursor = line->cursor;
         int lowest_change = tl_process_input(line, &t, inputs, n);
-//        if(lowest_change > _cursor) lowest_change = _cursor;
         free(inputs);
         memmove(s, s + i, len - i);
         t.input_buf.len -= i;
+        if(lowest_change < 0) {
+            t.cursor_byte = tl_text2cont(line, line->cursor, &colors);
+            content_change(&t, t.len, NULL, 0);
+            continue;
+        }
         colors.len = 0;
         if(line->mark >= 0 && line->mark != line->cursor) {
-            color_arr_append(&colors, (color_t[]){
-                    { .s = TERM_COLOR_UNDERLINE, .len = sizeof TERM_COLOR_UNDERLINE - 1, .at = line->mark > line->cursor ? line->cursor : line->mark },
-                    { .s = TERM_COLOR_RESET    , .len = sizeof TERM_COLOR_RESET     - 1, .at = line->mark > line->cursor ? line->mark : line->cursor }
-            }, 2);
+            int b = line->mark > line->cursor ? line->cursor : line->mark;
+            int e = line->mark > line->cursor ? line->mark : line->cursor;
+            color_arr_append(&colors, &(color_t){
+                    .s = line->selection_begin.s, .len = line->selection_begin.len, .at = b, .prio = line->selection_prio
+            }, 1);
+            color_arr_append(&colors, &(color_t){
+                    .s = line->selection_end.s  , .len = line->selection_end.len  , .at = e, .prio = line->selection_prio
+            }, 1);
+            for(int i = 0; i < line->highlights.len; i ++) {
+                color_t c = line->highlights.p[i];
+                if(c.at < b || c.at == b && c.prio < line->selection_prio || c.at >= e) continue;
+                if(is_color_reset(c.s, c.len))
+                    color_arr_append(&colors, &(color_t){
+                            .s = line->selection_begin.s, .len = line->selection_begin.len, .at = c.at, .prio = line->reselection_prio
+                    }, 1);
+            }
         }
         color_arr_append(&colors, line->highlights.p, line->highlights.len);
         color_sort(colors.p, colors.len);
+//        for(int i = 0; i < colors.len; i ++) DEBUG("[%i %i] ", colors.p[i].at, colors.p[i].prio);
+//        DEBUG("\n");
         temp.len = 0;
         tl_compose(line, lowest_change, &temp, &colors, false, true);
         t.cursor_byte = tl_text2cont(line, line->cursor, &colors);
         int at = tl_text2cont(line, lowest_change, &colors);
-        if(lowest_change > line->cursor) at += line->hint.len;
+//        DEBUG("%i -> %i %i\n", lowest_change, at, colors.len);
         content_change(&t, at, temp.s, temp.len);
     }
     ret:

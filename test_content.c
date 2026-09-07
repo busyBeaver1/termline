@@ -3,10 +3,37 @@
 
 #define STR(lit) (str_t){ .s = lit, .len = sizeof lit - 1 }
 
-void callback(termline_t *line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed) {
+int callback(termline_t *line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed) {
     line->hint.len = 0;
     if(line->mark < 0)
         str_append_lit(&line->hint, "\33[2mtest\33[22m");
+    line->highlights.len = 0;
+    for(int i = 0; i < line->len; i ++) {
+        if(line->s[i] == 'r') {
+            color_arr_append(&line->highlights, (color_t[]) {
+                    tu_color("\33[31m", i, 4096),
+//                    tu_color("\33[39m", i + 1, 0),
+                    tu_color("\33[m", i + 1, 0),
+            }, 2);
+        }
+    }
+    line->preview.len = 0;
+    str_append_lit(&line->preview, "\ntext entered: \33[2m");
+    str_append(&line->preview, line->s, line->len);
+    str_append_lit(&line->preview, "\33[22m");
+    return 0;//text_changed;
+}
+
+void tab_callback(termline_t *line, const input_t *inp) {
+    DEBUG("123\n");
+    if(line->cursor == 0) return;
+    if(line->s[line->cursor - 1] == ' ') {
+        tl_add_tab_compl(line, "a", 1);
+    } else {
+        tl_add_tab_compl(line, "AA", 2);
+        tl_add_tab_compl(line, "b", 1);
+        tl_add_tab_compl(line, "c", 1);
+    }
 }
 
 int main(void) {
@@ -20,7 +47,8 @@ int main(void) {
     hist_append(&tl.hist, &(histrec_t){ .s = STR("line 0") }, 1);
     hist_append(&tl.hist, &(histrec_t){ .s = STR("line 1\33[41m") }, 1);
     hist_append(&tl.hist, &(histrec_t){ .s = STR("line 2") }, 1);
-    tl.user_callback = callback;
+    tl.callback = callback;
+    tl.tab_callback = tab_callback;
     tl_interact(&tl);
     return 0;
 //    printf("r: %i\r\n", r);
