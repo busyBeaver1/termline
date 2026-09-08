@@ -1,16 +1,27 @@
-/*
- * Pefixes: term_*    - terminal-related utilities
- *          tu_*      - general utilities
- *          content_* - functions on content_t
- *          tl_*      - functions on termline_t
- *          KEY_*     - non-printable key representations
- *          MOD_*     - key modifier bits (for CTRL/ALT/SHIFT/nompad)
- *          LHREC_*   - inline history (for undo/redo) record types
- * _-postfixed functions are those with unbeautiful encapsulation boundaries
- */
+// define TERMLINE_IMPLEMENTATION to 1 before including this file to get the implementation
+// on POSIX, when including implementation, consider making this file the first include because
+// _XOPEN_SOURCE and _POSIX_C_SOURCE definitions shall go before all standard includes; or just copy those out
 
-#define _XOPEN_SOURCE 700 // for wcwidth from wchar.h
+#if !TERMLINE_INCLUDED
+#define TERMLINE_INCLUDED 1
+// ====== \/ HEADER \/ =====
+
+// systems (for conditional compilation)
+#define TU_POSIX   1
+#define TU_WINDOWS 2
+
+#if defined _WIN32 || defined _WIN64
+#define TU_SYSTEM TU_WINDOWS
+#elif defined __unix__ || defined __APPLE__
+#define TU_SYSTEM TU_POSIX
+#else
+#error Unknown system
+#endif
+
+#if TU_SYSTEM == TU_POSIX
+#define _XOPEN_SOURCE       700 // for wcwidth from wchar.h
 #define _POSIX_C_SOURCE 200112L // for pselect from sys/select.h
+#endif
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -23,115 +34,27 @@
 #include <stdarg.h>
 #include <inttypes.h>
 
-FILE *debug;
-#define DEBUG(...) do { fprintf(debug, __VA_ARGS__); fflush(debug); } while(0)
-
-#define TU_UNIX    1
-#define TU_WINDOWS 2
-
-#if defined _WIN32 || defined _WIN64
-#define TU_SYSTEM TU_WINDOWS
-#elif defined __unix__ || defined __APPLE__
-#define TU_SYSTEM TU_UNIX
-#else
-#error Unknown system
-#endif
-
-#if TU_SYSTEM == TU_UNIX
-// POSIX:
+#if TU_SYSTEM == TU_POSIX
 #include <sys/select.h> // for pselect for waiting for SIGWINCH why watching a file
-#include <termios.h> // for setting raw mode
-#include <signal.h> // for receiving SIGWINCH on window resize
-#include <fcntl.h> // for testing if there is data on stdin
+#include <termios.h>    // for setting raw mode
+#include <signal.h>     // for receiving SIGWINCH on window resize
+#include <fcntl.h>      // for testing if there is data on stdin
 #include <sys/ioctl.h>
 #include <time.h>
 #else
 #include <windows.h>
 #endif
 
-bool tu_default_ts_set = false;
-
-#if TU_SYSTEM == TU_UNIX
-struct termios tu_default_ts;
-
-// put terminal into raw mode
-// returns 0 on success, -1 on error
-// unly `in` is used, `out` kept for compat. with windows version
-int term_set_raw(FILE *in, FILE *out) {
-    int infd = fileno(in);
-    if(infd < 0) return -1;
-    struct termios ts = tu_default_ts;
-    if(!tu_default_ts_set) {
-        if(tcgetattr(infd, &ts)) return -1;
-        tu_default_ts_set = true;
-        tu_default_ts = ts;
-    }
-    ts.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-    ts.c_oflag &= ~OPOST;
-    ts.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-    ts.c_cflag &= ~(CSIZE | PARENB);
-    ts.c_cflag |= CS8;
-    if(tcsetattr(infd, 0, &ts)) return -1;
-    return 0;
-}
-
-// unly `in` is used, `out` kept for compat. with windows version
-int term_unset_raw(FILE *in, FILE *out) {
-    if(!tu_default_ts_set) return -1;
-    return tcsetattr(fileno(in), 0, &tu_default_ts);
-}
-#else
-DWORD tu_default_ts_in;
-DWORD tu_default_ts_out;
-
-HANDLE tu_file2handle(FILE *f) {
-    int fd = _fileno(f);
-    if(fd == -1) return INVALID_HANDLE_VALUE;
-    return (HANDLE)(intptr_t)_get_osfhandle(fd);
-}
-
-int term_set_raw(FILE *in, FILE *out) {
-    HANDLE inhd = tu_file2handle(in);
-    if(inhd == INVALID_HANDLE_VALUE) return -1;
-    HANDLE outhd = tu_file2handle(out);
-    if(outhd == INVALID_HANDLE_VALUE) return -1;
-    DWORD ints = tu_default_ts_in;
-    DWORD outts = tu_default_ts_out;
-    if(!tu_default_ts_set) {
-        if(!GetConsoleMode(inhd, &ints)) return -1;
-        if(!GetConsoleMode(outhd, &outts)) return -1;
-        tu_default_ts_set = true;
-        tu_default_ts_in = ints;
-        tu_default_ts_out = outts;
-    }
-    ints &= ~(ENABLE_ECHO_INPUT           | ENABLE_INSERT_MODE        | ENABLE_MOUSE_INPUT                 |
-              ENABLE_PROCESSED_INPUT      | ENABLE_QUICK_EDIT_MODE);
-    ints |=   ENABLE_EXTENDED_FLAGS       | ENABLE_WINDOW_INPUT       | ENABLE_VIRTUAL_TERMINAL_INPUT;
-    outts |=  ENABLE_PROCESSED_OUTPUT     | ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
-              DISABLE_NEWLINE_AUTO_RETURN;
-    if(!SetConsoleMode(inhd, ints)) return -1;
-    if(!SetConsoleMode(outhd, outts)) return -1;
-    return 0;
-}
-
-int term_unset_raw(FILE *in, FILE *out) {
-    if(!tu_default_ts_set) return -1;
-    HANDLE inhd = tu_file2handle(in);
-    if(inhd == INVALID_HANDLE_VALUE) return -1;
-    HANDLE outhd = tu_file2handle(out);
-    if(outhd == INVALID_HANDLE_VALUE) return -1;
-    if(!SetConsoleMode(inhd, tu_default_ts_in)) return -1;
-    if(!SetConsoleMode(outhd, tu_default_ts_out)) return -1;
-    return 0;
-}
+#ifndef TU_SAFETY_DELAY
+#define TU_SAFETY_DELAY 4 // before rerendering we shall get no resize for this number of ms to make race conditions with resizes less likely
 #endif
 
+// some ANSI escape sequences
 #define TERM_CURSOR_SAVE          "\0337"
 #define TERM_CURSOR_RESTORE       "\0338"
 #define TERM_CURSOR_HIDE          "\33[?25l"
 #define TERM_CURSOR_SHOW          "\33[?25h"
 #define TERM_REQUEST_CURSOR       "\33[6n"
-//#define TERM_REQUEST_SIZE         "\33[19t"
 #define TERM_CURSOR_TO            "\33[%i;%iH"
 #define TERM_CURSOR_RIGHT         "\33[%iC"
 #define TERM_CURSOR_LEFT          "\33[%iD"
@@ -145,11 +68,599 @@ int term_unset_raw(FILE *in, FILE *out) {
 #define TERM_COLOR_UNINVERSE      "\33[27m"
 #define TERM_COLOR_BACK_RED       "\33[41m"
 #define TERM_COLOR_BACK_DEFAULT   "\33[49m"
-#define TERM_CURSOR_NEWLINE       "\33[B\33[G" // does not push line unlike \r\n
+#define TERM_CURSOR_NEWLINE       "\33[B\33[G" // does not push bottom of the screen unlike \r\n
+
+
+#if TU_SYSTEM == TU_POSIX
+typedef struct termios term_mode_t;
+#else
+typedef struct {
+    DWORD in_mode;
+    DWORD out_mode;
+} term_mode_t;
+#endif
+
+// dynamic string (see implementation)
+struct tu_str_s {
+    char *s;
+    int len, cap;
+};
+
+// constant string
+typedef struct {
+    char *s;
+    int len;
+} tu_cstr_t;
+
+// construct one out of string literal
+#define tu_str(lit) (tu_cstr_t){ .s = lit, .len = sizeof(lit) - 1 }
+
+// put terminal into raw mode
+// returns 0 on success, -1 on error
+// stores current terminal mode info into `*mode` (nullable)
+int term_set_raw(FILE *in, FILE *out, term_mode_t *mode);
+
+// restore termonal mode from term_mode_t
+// return -1 on error, otherwsise 0
+int term_restore_mode(FILE *in, FILE *out, term_mode_t *mode);
+
+// get terminal window size and write into *width and *height (nullable)
+// returns 0 on success, -1 on error
+int term_get_size(FILE *in, FILE *out, int *width, int *height);
+
+// reads new size into *w, *h (nullable) and returns 1 if a resize has happened
+// returns 0 if no resize has happened; -1 on error
+// *w, *h should contain current size for comparison on windows
+int term_check_resize(FILE *in, FILE *out, int *w, int *h);
+
+// wait for either a resize event or timeout (in ms) or data on `in`, pushing that data onto input_buf
+// on a resize, new size gets written into *width and *height (nullable)
+// when timeout < 0, no timeout is used
+// on windows one also has to provide temp storage for high surrogate, inited with 0, to store a high surrogate until next call in case of half a surrogate pair
+#if TU_SYSTEM == TU_WINDOWS
+int term_wait_resize_or_in(FILE *in, struct tu_str_s *input_buf, long timeout, int *width, int *height, wchar_t *high_surrogate);
+#else
+int term_wait_resize_or_in(FILE *in, struct tu_str_s *input_buf, long timeout, int *width, int *height);
+#endif
+
+// read data from `in` in utf8 format; on POSIX this is just fgetc, reading at most 1 byte
+// on windows this involves utf16 to utf8 conversion, which may produce 2 CPs in case of an invalid surrogate pair, so up to 8 bytes
+// presumably an invalid high surrogate should produce U+FFFD � which only takes 3 bytes, so at most 7 total, but 8 for safety
+// returns the number of bytes read, 0 in case of EOF or an error
+int tu_gets_utf8(FILE *in, char *dst);
+
+// write utf8 string into `out`
+// returns 0 on success, -1 on error
+int tu_fwrite_utf8(char *s, int len, FILE *out);
+
+// cursor state
+struct tu_pos_s {
+    int x, y; // 1-based, top -> botom, left -> right
+    bool bouta_wrap; // set to true when the cursor is in right-most column and
+                     // a printable character has just been typed into same column; in this case the terminal
+                     // will wrap the line on next printable (given line wrap is enabled)
+};
+
+// does 64 attempts at receiving and parsing a responce to TERM_REQUEST_CURSOR
+// does not fill `bouta_wrap`
+// return { .x = -1, .y = -1 } on any error
+// if input_buf != NULL, all data from `in` except for the responce is appended to input_buf
+struct tu_pos_s term_read_pos(FILE *in, str_t *input_buf);
+
+// get cursor position; same output as for term_read_pos
+struct tu_pos_s term_get_pos(FILE *out, FILE *in, str_t *input_buf);
+
+// parse a utf8 CP from `_s` (of lingth len) with full validation, surrogates disallowed
+// returns the pointer to right after the cp
+// on an invalid or unfinished CP returns _s
+// writes parsing result into *cp when not NULL
+char *tu_step_utf8_cp(char *_s, int len, uint32_t *cp);
+
+// like tu_step_utf8_cp but returns >_s+len in case of partial but potentially valid CP
+char *tu_step_utf8_cp_partial(char *_s, int len, uint32_t *cp);
+
+// writes a utf8 cp into dst, returns pointer to right after the last byte written
+char *tu_write_utf8_cp(char *dst, uint32_t c);
+
+#define TU_CASE_LOWER 0
+#define TU_CASE_UPPER 2
+
+typedef struct {
+    uint32_t s[3];
+    int len;
+} uint32_x3_t;
+
+// uppercase or lowercase a unicode CP
+// _case is TU_CASE_LOWER or TU_CASE_UPPER
+// btw I had a funny bug here that I just used the name `case` and couldn't figure out why the compiler was yelling at me (case is a keyword)
+// returns up to 3 CPs
+// copies the behavior of python's .upper and .lower
+uint32_x3_t tu_case_cp(uint32_t c, int _case);
+
+// predict the length after uppercasing or lowercase a utf8 string
+int tu_case_len(const char *src, int len, int _case);
+
+// to_uppercase or to_lowercase
+// _case - TU_CASE_UPPER or TU_CASE_LOWER
+// movables - indices into src that get modified to point to respective places in dst
+// nm - count of movables
+int tu_case(char *dst, const char *src, int len, int _case, int *movables, int nm);
+
+// wcwidth implementation for windows; copies the behavior of wcwidth from the co-named python package
+// POSIX has regular locale-dependent wcwidth
+#if TU_SYSTEM == TU_WINDOWS
+int tu_wcwidth(uint32_t c);
+#endif
+
+// cursor in a content (see content_t), described in various ways
+typedef struct {
+    int byte; // byte number in the content's text, `byte` \in [0, t->len]
+    int row; // logical row (i.e. not accounting for line wrap), 0-based
+    int col; // logical column (i.e. not accounting for line wrap), 0-based
+    int cp; // number of visible items (width > 0) or tabs (\t, counted even when invisible) that are to the left of the cursor in a logical line
+    int row_byte;
+} cursor_t;
+
+// consumes one item from `s`, updating a bunch of state accordingly
+// item is a sequence of bytes that gets displayed "at once", it is one of:
+// - \t: moves cursor to next of 1,9,17,25,... columns
+// - \n: translated into \r\n optionally preceded by clearing rest of line
+// - \v, \f: both passed to terminal as is, both move cursor down 1 line
+// - (\e\[|\x9B|\xC2\x9B)[0-9;]*m (view as regex): changes output appearence; passed as is but using CSI \e[ and appended to color_stack
+// - any other ASCII control (0-31), including \e when not postfixed with "\[[0-9;]*m": displayed as one of U+2400...U+241F ␀␁␂␃␄␅␆␇␈␉␊␋␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟
+// - printable ASCII (32-126): displayed as is
+// - DEL (ASCII 127): displayed as U+2421 ␡
+// - valid utf8 codepoint with non-negative wcwidth: displayed as is
+// - valid utf8 codepoint with negative wcwidth: displayed as <HEX> where HEX is 4-digit or 8-digit hex of the cp;
+//                                               in inverted colors; to restore colors afterwards, the whole color_stack is printed
+// - a byte >=128, but not a part of a valid utf8 cp: displayed as U+FFFD �
+// ARGS:
+// - s: pointer to the beginning of an item
+// - len: maximum length of the item (length of s)
+// - p (nullable when out is NULL): current position
+// - width: terminal window width, not used when p is NULL
+// - split_wchars: whether printing wide character that does not fit on a line splits it into parts (e.g. on non-graphical TTY)
+//                 or gets it wrapped to the next line as a whole (e.g. in all graphical terminals I tested); not used when p is NULL
+// - out (nullable): where to append what shall go to the terminal
+// - color_stack (nullable when out is NULL): where to append (\e\[|\x9B|\xC2\x9B)[0-9;]*m sequences; used to restore color/appearence
+// - cursor (nullable): a cursor to advanse accourding to the consumed item
+// RETURNS pointer to right after the item
+char *tu_step_item(char *s, int len, struct tu_pos_s *p, int width, bool split_wchars, struct tu_str_s *out, struct tu_str_s *color_stack, cursor_t *cursor);
+
+// get boundaries of a utf8 cp; like tu_item_boundary
+// return as if single char when not a part of a valid cp
+void tu_utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *width);
+
+// get boundaries of the item in `s` that contains `at` byte
+// at should be in [0, len)
+// begin, end - nullable output params
+void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width);
+
+// how to find the origin after a window resize
+#define REORIGIN_RESTORE 1 // using save (\e7) + restore (\e8), tested and works in gnu terminal & xfce terminal
+                           // where the origin is adjusted after rewrapping lines, and in xterm where lines are not rewrapped
+#define REORIGIN_COMPUTE 2 // compute assuming lines rawrapping and that the cursor remains on the same char
+                           // used on windows because windows console does not auto-agjust saved pos on rewrap
+
+// content of terminal (editable part starting from "origin", containing a prompt, user input etc)
+// is editable by replacing everything starting at a byte (i.e. keeping a part)
+// should handle resizing given no resize happens while the resize handler is running and the content fits in the window
+// if REORIGIN_RESTORE is used, the origin should be saved via \e7
+// apparently terminals other than windows console that auto-recalculate line wrapping on resizes
+// also auto adjust saved position (only on re-wrapping, not on wripping when writing to the terminal)
+typedef struct {
+    char *s; // actual content
+    int len, cap;
+    // int *line_lengths; // visible character counts in logical lines (disregarding wrapping)
+    // int n_lines; // number of logical lines
+    int origin; // y position of origin
+    int width, height; // of terminal window
+    FILE *out; // file pointing to terminal (output only) (presumably just stdout)
+    FILE *in; // file pointing to terminal (input only) (presumably just stdin)
+    bool split_wchars; // behavior of the terminal when printing a 2-wide character such that it does not fit on a line
+                       // `false` means the whole thing is printed on the next line, `true` means it gets split between lines
+    struct tu_str_s input_buf; // when checking cursor location, other data than the responce gets put here; also in content_wait_in
+    int cursor_byte; // where the cursor shall point to; in [0, len]; negative means hide cursor and put it anywhere
+    bool cursor_bw; // indicates that on the last render cursor ended up with bouta_wrap=true, thus pointing to previous char to cursor_byte
+    bool resize_pending; // need to process resize before rendering
+    long resize_timeout; // if non-negative, only rerender after this number of ms of no resizes, in content_wait_in, to avoid race conditions
+                         // used on windows, though the necessity of this could've been dictated by testing on a super-laggy vm
+    int error; // gets set to CONT_ERR_* on an error; when non-zero, content is considered corrupted and all content_* funtions on it return immediately
+    int reorigin_method; // REORIGIN_*
+    #if TU_SYSTEM == TU_WINDOWS
+    wchar_t high_surrogate; // temp storage for high utf16 surrogate read from console, to then join with lower surrogate
+                            // 0 when no high surrogate is pending
+    #endif
+} content_t;
+
+// values for content_t.error
+#define CONT_ERR_GETPOS  1
+#define CONT_ERR_GETSIZE 2
+#define CONT_ERR_OUT     3
+#define CONT_ERR_WAIT    4
+#define CONT_ERR_SETUP   5
+#define CONT_ERR_IN      6
+#define CONT_ERR_TEST    7
+
+// create a contentwith the default settings
+content_t content_create(FILE *in, FILE *out);
+
+// initialize terminal-related parts +setup sigwinch listening on posix
+void content_init(content_t *t);
+
+// render the content starting at byte `start`
+// refuses to write to terminal if the window has been resized (tu_winch on unix or size change on windows)
+// in this case t->resize_pending is set and one should first call content_resize
+void content_render_from(content_t *t, int start, bool extra_overwrite);
+
+// replace the rest of the content starting from byte `start` with `cont` of length `len`
+// `start` should be in [0, t->len], `len` may be zero
+// also attempts to render replaced part of content (if no resize is pending)
+void content_change(content_t *t, int start, const char *cont, int len);
+
+#if TU_SYSTEM == TU_WINDOWS
+#define tu_sleep_ms Sleep
+#else
+void tu_sleep_ms(unsigned long t);
+#endif
+
+// rerender the content assuming the terminal window has been resized
+// width and height have to be set before calling this
+// resets resize_pending flag (may immediately get set again if we can't rerender in time before next resize event)
+void content_resize(content_t *t);
+
+// wait for data received on t->in, handling window resizes
+// all received data gets read and put into t->input_buf
+void content_wait_in(content_t *t);
+
+// dynamic array of strs
+struct tu_str_arr_s {
+    struct tu_str_s *p;
+    int len, cap;
+};
+
+typedef struct {
+    str_t s, e; // original, edited
+    bool edited;
+} histrec_t;
+
+#define tu_implement_arr_struct(prefix, type)         \
+typedef struct { type *p; int len, cap; } prefix##_t; \
+
+tu_implement_arr_struct(tu_hist, histrec_t)
+
+typedef struct termline_s termline_t;
+
+// input handlers; called sequentially; each consumes/handles some number of keystrokes/inputs; when no handler consumes an input, it is discarded
+// when a number of inputs is consumed by a different handler [than this one] or an input is discarded, and unhandle [this one] is defined, it is called on those inputs
+typedef struct {
+    // - line: the termline to make changes upon
+    // - t: for reference only; the content currently displayed
+    // - lowest_change: write the lowest byte you've altered in line->s here, if it's lower than the current value of *lowest_change
+    // - inputs: the keystrokes to handle; the handler should consume a numer of consecative keystrokes starting at index 0 that are of the kind this handler cares about
+    // - len: the numer of inputs available
+    // returns: the number of inputs handled/consumed
+    int (*handle)(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len); // not nullable
+
+    void (*unhandle)(termline_t *line, tu_input_t *inputs, int len); // nullable
+} tu_handler_t;
+
+typedef struct {
+    char *s;
+    int len, cap;
+    int ignored;
+} tu_tab_t;
+
+typedef struct {
+    char *s;
+    int len, cap;
+    int cursor, mark;
+    bool mark_weak;
+} lhrec_t; // line history record
+
+// text formating sequences of the form \e\[[0-9;]*m, like those TERM_COLOR_*
+typedef struct {
+    char *s;
+    int len;
+    unsigned int at; // before which byte to put it
+    unsigned int prio; // smaller go first; non-negative only
+} tu_color_t;
+
+#define tu_color(lit, _at, _prio) (tu_color_t){ .s = lit, .len = sizeof(lit) - 1, .at = _at, .prio = _prio }
+
+tu_implement_arr_struct(tu_color_arr, tu_color_t)
+void tu_color_arr_append(tu_color_arr *arr, tu_color_t *cont, int len); // append len colors from `cont` to `arr`
+tu_implement_arr_struct(lhrec_arr, lhrec_t)
+tu_implement_arr_struct(tu_tab_arr, tu_tab_t)
+tu_implement_arr_struct(tu_handler_arr, tu_handler_t *p)
+
+// iteractive prompt
+struct termline_s {
+    // === user-facing fields ===
+    char *s; // the entered text
+    int len, cap;
+    int cursor, mark; // the selection is from mark to cursor; no selection when mark < 0
+    bool mark_weak; // signals the state like just after yanking when doing anything removes selection; meaningless when mark < 0
+
+    void (*tab_callback)(termline_t* line, const tu_input_t *tab);
+    int (*callback)(termline_t* line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed);
+
+    tu_cstr_t prompt; // prompt that's shown once before all user's input
+    tu_cstr_t nl_prompt; // prompt shown after a newline in user's input; like "> " in bash/sh/zsh or "... " in python
+
+    tu_cstr_t selection_begin, selection_end; // how to highlight selection; should be ANI CSs, \e\[[0-9;]*m
+
+    tu_color_arr_t highlights;
+    tu_cstr_t hint; // inline hint shown at the cursor; is set to len=0 when in search mode
+    tu_cstr_t preview; // line shown at the bottom; not displayed when in search mode
+
+    int exit_reason; // TL_EXIT_*
+    int content_error; // CONT_ERR_*, in case exit_reason = TL_EXIT_ERROR
+
+    // === internal fields ===
+    content_t content;
+
+    int magnet; // the column where the cursor "magnets" towards when navigating up/down; -1 for current cursor culumn
+
+    int char_search; // usually 0; after CTRL+]: +1 after ALT+CTRL+]: -1
+
+    lhrec_arr_t lh; // inline history (undo/redo)
+    int lh_idx;
+    int lhrec_type; // one of LHREC_*; lhrec is saved when we get an lhrec of a different type or LHREC_INDEP
+                    // to prevent saving like after each small edit
+
+    tu_hist_t hist; // command history
+    int hist_idx;
+
+    int hist_search; // 0 when not in search, 1 for forward, -1 for backwards
+    struct tu_str_s search; // search string
+    bool search_success;
+
+    FILE *in, *out; // presumably stdin and stdout
+
+    struct tu_str_arr_s killring;
+    int kr_idx;
+
+    tu_handler_arr_t handlers;
+
+    tu_tab_arr_t tab_compls;
+    int tab_option;
+
+    int selection_prio; // priority of selection colors
+    int reselection_prio; // priority of reintroducing selection_begin after a user's color reset (\e[0m or \e[m) within the selection
+    int hint_prio; // priority of hint string relative to colors
+};
+
+// create a default termline
+termline_t tl_create(FILE *in, FILE *out);
+
+// reasons why tl_interact can return
+#define TL_EXIT_ERROR     1 // an error has hapened to content
+#define TL_EXIT_ENTER     2 // normal exit after Enter from user
+#define TL_EXIT_INTERRUPT 3 // Ctrl+C
+#define TL_EXIT_EOF       4 // Ctrl+D when the line is empty
+
+// go to history entry i and save the current one
+void tl_hist(termline_t *line, int i);
+
+// add tab completion option; this should only be called from tab_callback
+void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignred_part);
+
+// types of modifications an lhrec could be saved after
+#define LHREC_INIT           0
+#define LHREC_INSERT_WORD    1
+#define LHREC_INSERT_NONWORD 2
+#define LHREC_KILL_WORD      3
+#define LHREC_KILL_NONWORD   4
+#define LHREC_YANK           5
+#define LHREC_HIST           6
+#define LHREC_TAB            7
+#define LHREC_INDEP          8
+
+// save an lhrec in case type is diferent from the previous one
+// only advances current lhrec index in case `advanse = true`
+void tl_lhrec(termline_t *line, int type, bool advanse);
+
+// === key representation format ===
+// key is a uint32_t, one of:
+// - KEY_UNKNOWN: an unknown SCI, SS2 or SS3 -inited sequence
+// - KEY_INVALID_CP: a byte which is not a part of a valid SCI, SS2 or SS3 -inited sequence nor a utf8 cp
+// - 0x2*****: a special key, one of the definitions below
+// - a number with NON_CHAR bits unset: a unicode CP (codepoint, equivalently character, surrogates not allowed), not an ASCII control ([0-0x1F]; 0x7F);
+//       ASCII controls are rerouted into 0x2001** or KEY_BACKSPACE | MOD_CTRL (for DEL 0x7F) or
+//       MOD_CTRL | [@-_] via the rule `k = Ctrl + (chr(k) + 64)` where k is the ASCII on stdin
+//       chr(64 + [0-0x1F]) = @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_
+//       some of Ctrl+ASCIIs are equivalent to 0x2001** keys, then latter are used;
+//       some have duplicates (e.g. Ctrl+7=Ctrl+_=Ctrl+/=0x7F), then one following the +64 rule is prefered
+// 2 categories above can also be ORed with one or multiple MOD_* with the meaning implied; ANDing with NON_MOD gets rid of that
+#define KEY_UNKNOWN    (uint32_t)-2
+#define KEY_INVALID_CP (uint32_t)-1
+#define KEY_HOME           0x200001
+#define KEY_INSERT         0x200002
+#define KEY_DELETE         0x200003
+#define KEY_END            0x200004
+#define KEY_PAGEUP         0x200005
+#define KEY_PAGEDOWN       0x200006
+#define KEY_F1             0x20000B
+#define KEY_F2             0x20000C
+#define KEY_F3             0x20000D
+#define KEY_F4             0x20000E
+#define KEY_F5             0x20000F
+#define KEY_F6             0x200011
+#define KEY_F7             0x200012
+#define KEY_F8             0x200013
+#define KEY_F9             0x200014
+#define KEY_F10            0x200015
+#define KEY_F11            0x200017
+#define KEY_F12            0x200018
+#define KEY_F13            0x200019
+#define KEY_F14            0x20001A
+#define KEY_F15            0x20001C
+#define KEY_F16            0x20001D
+#define KEY_F17            0x20001F
+#define KEY_F18            0x200020
+#define KEY_F19            0x200021
+#define KEY_F20            0x200022
+#define KEY_ENTER          0x200100
+#define KEY_BACKSPACE      0x200101
+#define KEY_ESCAPE         0x200102
+#define KEY_TAB            0x200103
+#define KEY_UP             0x200201
+#define KEY_DOWN           0x200202
+#define KEY_RIGHT          0x200203
+#define KEY_LEFT           0x200204
+
+#define NON_CHAR           0x3E00000
+#define NON_MOD            0x03FFFFF
+
+#define MOD_CTRL           0x0400000
+#define MOD_ALT            0x0800000
+#define MOD_SHIFT          0x1000000
+#define MOD_NUMPAD         0x2000000
+
+// parses an input item from s of size len
+// returns pointer to right after an input item, writing the parsed result into `*in`
+// returns NULL if an input item is possibly unfinished
+char *tu_step_input(char *s, int len, tu_input_t *in);
+
+// translate content byte (in the displayed string) into text byte; disregarding colors and hint
+int tl_cont2text(termline_t *line, int cursor_byte);
+
+// translate text byte position into content byte position
+// colors are accounted for when provided (non NULL)
+// a color with at=n goes between bytes n-1 and n, but with text_byte=n it is not accounted for
+// i.e. colors are "coupled" with bytes their `at`s point to
+int tl_text2cont(termline_t *line, int text_byte, tu_color_arr_t *colors);
+
+void tl_insert(termline_t *line, bool before_cursor, int at, char *s, int len);
+
+void tl_kill(termline_t *line, int at, int len, bool to_killring);
+
+// uppercase or lowercase part of the text
+// returns length increment (negative for decrement)
+int tl_case(termline_t *line, int at, int len, int _case);
+
+// create the text for the content (i.e. including prompts, hint, colors etc)
+// excludes hint, tab suggestions and preview when include_decorations=false
+// colors have to be sorted
+void tl_compose(termline_t *line, int start, str_t *out, tu_color_arr_t *colors, bool include_prompt, bool include_decorations);
+
+int tu_search_back_word(char *s, int byte, bool big);
+
+int tu_search_forward_word(char *s, int len, int byte, bool big);
+
+// cursor movements
+// move is +-1
+void tl_move_h(termline_t *line, int move); // horisontal
+void tl_move_v(termline_t *line, const content_t *t, int move); // vertical
+void tl_move_H(termline_t *line, int move); // big horisontal (Home/End)
+
+// input handlert
+int tl_handle_text(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_kills(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+void tl_unhandle_yanks(termline_t *line, tu_input_t *inputs, int len);
+int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_controls(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_case(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_lh(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+void tl_unhandle_hist(termline_t *line, tu_input_t *inputs, int len);
+int tl_handle_tabs(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len);
+void tl_unhandle_tabs(termline_t *line, tu_input_t *inputs, int len);
+int tl_process_input(termline_t *line, content_t *t, tu_input_t *inputs, int len);
+
+
+// ====== \/ IMPLEMENTATION \/ =====
+#if TERMLINE_IMPLEMENTATION
+
+// Pefixes: term_*, TERM_ - terminal-related utilities
+//          tu_*          - general utilities
+//          content_*     - functions on content_t
+//          tl_*          - functions on termline_t
+//          KEY_*         - non-printable key representations
+//          MOD_*         - key modifier bits (for CTRL/ALT/SHIFT/numpad)
+//          LHREC_*       - inline history (for undo/redo) record types
+// _-postfixed functions are those with unbeautiful encapsulation boundaries
+
+//FILE *debug;
+//#define DEBUG(...) do { fprintf(debug, __VA_ARGS__); fflush(debug); } while(0)
+
+#if TU_SYSTEM == TU_POSIX
+
+// put terminal into raw mode
+// returns 0 on success, -1 on error
+// unly `in` is used, `out` kept for compat. with windows version
+// stores terminal mode info into `*mode` (nullable)
+int term_set_raw(FILE *in, FILE *out, term_mode_t *mode) {
+    int infd = fileno(in);
+    if(infd < 0) return -1;
+    struct termios ts;
+    if(tcgetattr(infd, &ts)) return -1;
+    if(mode) *mode = ts;
+    ts.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+    ts.c_oflag &= ~OPOST;
+    ts.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    ts.c_cflag &= ~(CSIZE | PARENB);
+    ts.c_cflag |= CS8;
+    if(tcsetattr(infd, 0, &ts)) return -1;
+    return 0;
+}
+
+// unly `in` is used, `out` kept for compat. with windows version
+// restore termonal mode from term_mode_t
+// return -1 on error, otherwsise 0
+int term_restore_mode(FILE *in, FILE *out, term_mode_t *mode) {
+    int infd = fileno(in);
+    if(infd < 0) return -1;
+    return tcsetattr(infd, 0, mode);
+}
+#else
+HANDLE tu_file2handle(FILE *f) {
+    int fd = _fileno(f);
+    if(fd == -1) return INVALID_HANDLE_VALUE;
+    return (HANDLE)(intptr_t)_get_osfhandle(fd);
+}
+
+// stores terminal mode info into `*mode` (nullable)
+// return -1 on an error, otherwsise 0
+int term_set_raw(FILE *in, FILE *out, term_mode_t *mode) {
+    HANDLE inhd = tu_file2handle(in);
+    if(inhd == INVALID_HANDLE_VALUE) return -1;
+    HANDLE outhd = tu_file2handle(out);
+    if(outhd == INVALID_HANDLE_VALUE) return -1;
+    DWORD in_mode, out_mode;
+    if(!GetConsoleMode(inhd, &in_mode)) return -1;
+    if(!GetConsoleMode(outhd, &out_mode)) return -1;
+    if(mode) { mode->in_mode = in_mode; mode->out_mode = out_mode; }
+    in_mode &= ~(ENABLE_ECHO_INPUT           | ENABLE_INSERT_MODE        | ENABLE_MOUSE_INPUT                 |
+                 ENABLE_PROCESSED_INPUT      | ENABLE_QUICK_EDIT_MODE);
+    in_mode |=   ENABLE_EXTENDED_FLAGS       | ENABLE_WINDOW_INPUT       | ENABLE_VIRTUAL_TERMINAL_INPUT;
+    out_mode |=  ENABLE_PROCESSED_OUTPUT     | ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
+                 DISABLE_NEWLINE_AUTO_RETURN;
+    if(!SetConsoleMode(inhd, in_mode)) return -1;
+    if(!SetConsoleMode(outhd, out_mode)) return -1;
+    return 0;
+}
+
+// restore termonal mode from term_mode_t
+// return -1 on error, otherwsise 0
+int term_restore_mode(FILE *in, FILE *out, term_mode_t *mode) {
+    if(!tu_default_ts_set) return -1;
+    HANDLE inhd = tu_file2handle(in);
+    if(inhd == INVALID_HANDLE_VALUE) return -1;
+    HANDLE outhd = tu_file2handle(out);
+    if(outhd == INVALID_HANDLE_VALUE) return -1;
+    if(!SetConsoleMode(inhd, mode->in_mode)) return -1;
+    if(!SetConsoleMode(outhd, mode->out_mode)) return -1;
+    return 0;
+}
+#endif
 
 // parse non-negative integer ([0-9]*) from s into x and return pointer to place right after the end of it
 // 0 on empty
-char *parse_uint(char *s, int *x) {
+static char *parse_uint(char *s, int *x) { // todo: replace with sscanf
     *x = 0;
     for(; '0' <= *s && *s <= '9'; s ++) {
         int x_ = *x * 10 + (*s - '0');
@@ -159,44 +670,34 @@ char *parse_uint(char *s, int *x) {
     return s;
 }
 
-#define tu_implement_arr(prefix, type)                       \
-typedef struct { type *p; int len, cap; } prefix##_t;       \
-                                                             \
-void prefix##_stretch(prefix##_t *arr, int cap) {           \
-    if(arr->cap >= cap) return;                            \
-    if(arr->cap <= 0) arr->cap = 64;                       \
-    while(arr->cap < cap) arr->cap *= 2;                  \
-    type *new_p = malloc(arr->cap * sizeof(type));          \
-    if(arr->p) {                                             \
-        memcpy(new_p, arr->p, arr->len * sizeof(type));      \
-        free(arr->p);                                        \
-    }                                                        \
-    arr->p = new_p;                                          \
-}                                                            \
-                                                             \
-void prefix##_append(prefix##_t *arr, type *cont, int len) { \
-    prefix##_stretch(arr, arr->len + len);                   \
-    memcpy(arr->p + arr->len, cont, len * sizeof(type));     \
-    arr->len += len;                                         \
+#define tu_implement_arr_functions(prefix, type)                    \
+static void prefix##_stretch(prefix##_t *arr, int cap) {            \
+    if(arr->cap >= cap) return;                                     \
+    if(arr->cap <= 0) arr->cap = 64;                                \
+    while(arr->cap < cap) arr->cap *= 2;                            \
+    type *new_p = malloc(arr->cap * sizeof(type));                  \
+    if(arr->p) {                                                    \
+        memcpy(new_p, arr->p, arr->len * sizeof(type));             \
+        free(arr->p);                                               \
+    }                                                               \
+    arr->p = new_p;                                                 \
+}                                                                   \
+                                                                    \
+static void prefix##_append(prefix##_t *arr, type *cont, int len) { \
+    prefix##_stretch(arr, arr->len + len);                          \
+    memcpy(arr->p + arr->len, cont, len * sizeof(type));            \
+    arr->len += len;                                                \
 }
 
-typedef struct {
-    int x, y; // 1-based, top->botom, left->right
-    bool bouta_wrap; // set to true when the cursor is in right-most column and
-                     // a printable character has just been typed into same column; in this case the terminal
-                     // will wrap the line on next printable (given line wrap is enabled)
-} pos_t;
+#define tu_implement_arr(prefix, type)   \
+tu_implement_arr_struct(prefix, type)    \
+tu_implement_arr_functions(prefix, type)
 
-typedef struct {
-    char *s;
-    int len, cap;
-} str_t;
+// only using short names in the implementation to avoid collisions
+typedef struct tu_str_s str_t;
+typedef struct tu_pos_s pos_t;
 
-#define tu_str(lit) (str_t){ .s = lit, .len = sizeof(lit) - 1 }
-
-tu_implement_arr(str_arr, str_t)
-
-void str_stretch(str_t *s, int cap) {
+static void str_stretch(str_t *s, int cap) {
     if(s->cap >= cap) return;
     if(s->cap <= 0) s->cap = 64;
     while(s->cap < cap) s->cap *= 2;
@@ -208,7 +709,7 @@ void str_stretch(str_t *s, int cap) {
     s->s = new_s;
 }
 
-void str_printf(str_t *dst, const char *format, ...) {
+static void str_printf(str_t *dst, const char *format, ...) {
     va_list args;
     va_start(args, format);
     int n = vsnprintf(dst->s + dst->len, dst->cap - dst->len, format, args);
@@ -221,7 +722,7 @@ void str_printf(str_t *dst, const char *format, ...) {
     va_end(args);
 }
 
-void str_append(str_t *dst, const char *s, int len) {
+static void str_append(str_t *dst, const char *s, int len) {
     if(len == 0) return;
     str_stretch(dst, dst->len + len);
     memcpy(dst->s + dst->len, s, len);
@@ -229,7 +730,7 @@ void str_append(str_t *dst, const char *s, int len) {
 }
 
 // allows out of bounds, returns a view that can be turned into a self-allocated string with str_sovereign
-str_t str_substr(str_t *s, int at, int len) {
+static str_t str_substr(str_t *s, int at, int len) {
     if(at + len < 0 || at > s->len) return (str_t){ NULL };
     if(at < 0) { len += at; at = 0; }
     if(at + len >= s->len) len = s->len - at;
@@ -237,7 +738,7 @@ str_t str_substr(str_t *s, int at, int len) {
 }
 
 // reallocate, copy into new pointer and forget about the old one
-void str_sovereign(str_t *s) {
+static void str_sovereign(str_t *s) {
     if(s->len == 0) { s->cap = 0; s->s = NULL; return; }
     s->cap = 64;
     while(s->cap < s->len) s->cap *= 2;
@@ -248,7 +749,8 @@ void str_sovereign(str_t *s) {
 
 #define str_append_lit(dst, s_literal) str_append(dst, s_literal, sizeof(s_literal) - 1)
 
-volatile bool tu_winch = false;
+typedef struct tu_str_arr_s str_arr_t;
+tu_implement_arr_functions(str_arr, str_t)
 
 #if TU_SYSTEM == TU_WINDOWS
 // only `out` is used, `in` kept for compat. with unix version
@@ -274,8 +776,12 @@ int term_get_size(FILE *in, FILE *out, int *width, int *height) {
 }
 #endif
 
-#if TU_SYSTEM == TU_UNIX
+#if TU_SYSTEM == TU_POSIX
 
+static volatile bool tu_winch = false;
+
+// reads new size into *w, *h (nullable) and returns 1 if a resize has happened
+// returns 0 if no resize has happened; -1 on error
 int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
     if(!tu_winch) return 0;
     tu_winch = false;
@@ -283,37 +789,23 @@ int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
     return 1;
 }
 
-void tu_winch_handler(int) { tu_winch = true; }
+static void winch_handler(int) { tu_winch = true; }
 
 // necessery prep to call term_wait_resize_or_in
-int setup_resize_watch() {
+static int setup_resize_watch() {
     //sigset_t mask;
     //sigemptyset(&mask);
     //sigaddset(&mask, SIGWINCH);
     //if(sigprocmask(SIG_BLOCK, &mask, NULL) < 0) return -1; // block SIGWINCH not to lose it when not running term_wait_resize_or_in
     struct sigaction sa = {
-        .sa_handler = tu_winch_handler,
+        .sa_handler = winch_handler,
         .sa_flags = SA_RESTART
     };
     sigemptyset(&sa.sa_mask);
     return sigaction(SIGWINCH, &sa, NULL);
 }
 
-/*
-// returns -1 on error, 0 if no data avail., 1 if data is avail. for reading
-int _data_pending(FILE *in) {
-    int infd = fileno(in);
-    int options = fcntl(infd, F_GETFL);
-    if(options < 0) return -1;
-    if(fcntl(infd, F_SETFL, options | O_NONBLOCK) == -1) return -1;
-    int c = fgetc(in);
-    if(fcntl(infd, F_SETFL, options) == -1) return -1;
-    if(c != EOF && ungetc(c, in) == EOF) return -1;
-    return c != EOF;
-}
-*/
-
-int tu_read_avail(FILE *in, str_t *dst) {
+static int read_avail(FILE *in, str_t *dst) {
     int infd = fileno(in);
     int options = fcntl(infd, F_GETFL);
     if(options < 0) return -1;
@@ -327,15 +819,15 @@ int tu_read_avail(FILE *in, str_t *dst) {
     return N;
 }
 
-struct timespec tu_ms2ts(unsigned long t) {
+static struct timespec ms2ts(unsigned long t) {
     return (struct timespec){
         .tv_sec = t / 1000,
         .tv_nsec = (t % 1000) * 1000000
     };
 }
 
-int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, int *width, int *height) {
-    int rb = tu_read_avail(in, input_buf);
+int term_wait_resize_or_in(FILE *in, str_t *input_buf, long timeout, int *width, int *height) {
+    int rb = ead_avail(in, input_buf);
     if(rb) return 0;
     int infd = fileno(in);
     sigset_t mask;
@@ -345,13 +837,13 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, in
         fd_set fs, fse;
         FD_ZERO(&fs);      FD_ZERO(&fse);
         FD_SET(infd, &fs); FD_SET(infd, &fse);
-        struct timespec ts = tu_ms2ts(timeout);
+        struct timespec ts = ms2ts(timeout);
         int _errno = errno; errno = 0;
         int r = pselect(infd + 1, &fs, NULL, &fse, timeout >= 0 ? &ts : NULL, &mask); // wait for any change on `in` with `mask` as temporary signal mask
         int e = errno; errno = _errno;
         if(r == 0) return 0;
         if(r == 1 && FD_ISSET(infd, &fs) && !FD_ISSET(infd, &fse)) {
-            int rb = tu_read_avail(in, input_buf);
+            int rb = read_avail(in, input_buf);
             return rb == 0 ? -1 : 0;
         }
         if(r == -1 && e == EINTR) continue;
@@ -362,7 +854,8 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, in
     return 1;
 }
 
-int tu_gets(FILE *in, char *dst)  {
+// reads at most 1 byte from into dst
+int tu_gets_utf8(FILE *in, char *dst)  {
     int c = fgetc(in);
     if(c == EOF) return 0;
     *dst = (char)c;
@@ -378,7 +871,7 @@ typedef struct {
     int len, cap;
 } wstr_t;
 
-void wstr_stretch(wstr_t *s, int cap) {
+static void wstr_stretch(wstr_t *s, int cap) {
     if(s->cap >= cap) return;
     if(s->cap <= 0) s->cap = 1;
     while(s->cap < cap) s->cap *= 2;
@@ -388,12 +881,12 @@ void wstr_stretch(wstr_t *s, int cap) {
     s->s = new_s;
 }
 
-void wstr_push(wstr_t *s, wchar_t c) {
+static void wstr_push(wstr_t *s, wchar_t c) {
     wstr_stretch(s, s->len + 1);
     s->s[s->len ++] = c;
 }
 
-int tu_encode_wchars(str_t *dst, wchar_t *s, int len) {
+static int encode_wchars(str_t *dst, wchar_t *s, int len) {
     if(len == 0) return 0;
     int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
     if(n == 0) return -1;
@@ -404,7 +897,7 @@ int tu_encode_wchars(str_t *dst, wchar_t *s, int len) {
     return 0;
 }
 
-int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, int *w, int *h, wchar_t *high_surrogate) {
+int term_wait_resize_or_in(FILE *in, str_t *input_buf, long timeout, int *w, int *h, wchar_t *high_surrogate) {
     HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return -1;
     bool got_resize = false;
@@ -440,7 +933,7 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, in
                 *high_surrogate = s.s[-- s.len];
             else *high_surrogate = 0;
         }
-        if(input_buf && tu_encode_wchars(input_buf, s.s, s.len) < 0) goto err;
+        if(input_buf && encode_wchars(input_buf, s.s, s.len) < 0) goto err;
         bool err = false;
         if(0) { err: err = true; }
         free(s.s); free(irs);
@@ -449,6 +942,9 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, unsigned long timeout, in
     }
 }
 
+// reads new size into *w, *h (nullable) and returns 1 if a resize has happened
+// returns 0 if no resize has happened; -1 on error
+// *w, *h should contain current size for comparison
 int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
     int x, y;
     if(term_get_size(in, out, &x, &y) < 0) return -1;
@@ -458,7 +954,8 @@ int term_check_resize(FILE *in, FILE *out, int *w, int *h) {
     return r;
 }
 
-int tu_gets(FILE *in, char *dst) {
+// reads at most 8 bytes from into dst
+int tu_gets_utf8(FILE *in, char *dst) {
     HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return 0;
     wchar_t ws[2];
@@ -471,7 +968,7 @@ int tu_gets(FILE *in, char *dst) {
     if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) goto read1;
     ws[0] = ke.uChar.UnicodeChar;
     int N = 1;
-    if(0xD800 <= ws[0] && ws[0] < 0xDC00) { // got high surogate, wsaiting for lows counterpart
+    if(0xD800 <= ws[0] && ws[0] < 0xDC00) { // got high surogate, waiting for the low counterpart
         read2:
         WaitForSingleObject(inhd, INFINITE);
         if(!PeekConsoleInputW(inhd, &ir2, 1, &n) || n == 0) return 0;
@@ -502,20 +999,14 @@ int tu_fwrite_utf8(char *s, int len, FILE *out) {
 }
 
 #endif
-//#if 0
-// does not fill `bouta_wrap`
-// sets errno to ENODATA on EOF from input and to ETIMEDOUT if answer is not received in 64 attempts
-// return { .x = -1, .y = -1 } on any error
-// if input_buf != NULL, all data from `in` except for the responce is appended to input_buf
-pos_t term_read_pos(FILE *out, FILE *in, str_t *input_buf) {
-//    if(fprintf(out, TERM_REQUEST_CURSOR) < 0) goto err_ret;
-//    if(fflush(out) < 0) goto err_ret;
+
+pos_t term_read_pos(FILE *in, str_t *input_buf) {
     // report format: "\e[{Y};{X}R"
     char buf[128];
     int bytes_read = 0;
     for(int i = 0; i < 64; i ++) {
         int k;
-        while(k = tu_gets(in, buf + bytes_read)) {
+        while(k = tu_gets_utf8(in, buf + bytes_read)) {
             bytes_read += k;
             for(int j = bytes_read - k; j < bytes_read; j ++) {
                 if(j >= 2 && buf[j] == 'R') goto ok;
@@ -541,9 +1032,10 @@ pos_t term_read_pos(FILE *out, FILE *in, str_t *input_buf) {
         err:;
     }
     if(input_buf) str_append(input_buf, buf, bytes_read);
-    errno = ETIMEDOUT;
+//    errno = ETIMEDOUT;
     goto err_ret;
-    nodata: errno = ENODATA;
+    nodata:
+//    errno = ENODATA;
     err_ret:
     return (pos_t){ .x = -1, .y = -1 };
 }
@@ -551,7 +1043,7 @@ pos_t term_read_pos(FILE *out, FILE *in, str_t *input_buf) {
 pos_t term_get_pos(FILE *out, FILE *in, str_t *input_buf) {
     if(fprintf(out, TERM_REQUEST_CURSOR) < 0 ||
        fflush(out) < 0) return (pos_t){ .x = -1, .y = -1 };
-    return term_read_pos(out, in, input_buf);
+    return term_read_pos(in, input_buf);
 }
 
 char *tu_step_utf8_cp(char *_s, int len, uint32_t *cp) {
@@ -595,6 +1087,7 @@ char *tu_step_utf8_cp(char *_s, int len, uint32_t *cp) {
     return _s;
 }
 
+// returns > _s + len when partial cp found
 char *tu_step_utf8_cp_partial(char *_s, int len, uint32_t *cp) {
     unsigned char *s = (unsigned char*)_s;
     char template[4] = "\x00\x80\x80\x80";
@@ -605,7 +1098,7 @@ char *tu_step_utf8_cp_partial(char *_s, int len, uint32_t *cp) {
     return tu_step_utf8_cp(template, 4, cp) - template + _s;
 }
 
-char *write_utf8_cp(char *dst, uint32_t c) {
+char *tu_write_utf8_cp(char *dst, uint32_t c) {
     assert(c < 0x110000);
     if(c < 0x80) {
         *dst = (char)c;
@@ -623,16 +1116,7 @@ char *write_utf8_cp(char *dst, uint32_t c) {
     return dst + 4;
 }
 
-// cursor in a content, described in various ways
-typedef struct {
-    int byte; // byte number in the content's text, `byte` \in [0, t->len]
-    int row; // logical row (i.e. not accounting for line wrap), 0-based
-    int col; // logical column (i.e. not accounting for line wrap), 0-based
-    int cp; // number of visible items (width > 0) or tabs (\t, counted even when invisible) that are to the left of the cursor in a logical line
-    int row_byte;
-} cursor_t;
-
-int tu_binary_search(const uint32_t *indices, int len, uint32_t c) {
+static int tu_binary_search(const uint32_t *indices, int len, uint32_t c) {
     int l = 0;
     int u = len - 1;
     if(indices[u] <= c) return u;
@@ -644,7 +1128,7 @@ int tu_binary_search(const uint32_t *indices, int len, uint32_t c) {
     return l;
 }
 
-// copying python's builtin .upper and .lower
+// copying the behavior of python's builtin .upper and .lower
 const uint32_t tu_lower_indices_even[] = {
 0,66,92,192,224,256,304,306,312,330,376,378,386,390,392,394,396,398,400,402,404,406,408,410,412,414,416,422,424,428,430,
 432,434,436,440,442,444,446,452,454,456,458,460,478,496,498,502,504,544,546,564,570,572,574,576,580,582,592,880,884,886,
@@ -731,19 +1215,13 @@ const uint32_t *tu_case_indices[] =
 const int *tu_case_shifts[] =
     { tu_lower_shifts_even,  tu_lower_shifts_odd,  tu_upper_shifts_even, tu_upper_shifts_odd };
 
-#define CASE_LOWER 0
-#define CASE_UPPER 2
-
-typedef struct {
-    uint32_t s[3];
-    int len;
-} uint32_x3_t;
-
+// uppercase or lowercase a unicode CP
+// _case is TU_CASE_LOWER or TU_CASE_UPPER
 uint32_x3_t tu_case_cp(uint32_t c, int _case) {
     assert(c < 0x110000);
     uint32_t *s;
     #define TU_C(i, ...) case i: s = (uint32_t[3]){ __VA_ARGS__ }; goto multichar;
-    if(_case == CASE_UPPER) {
+    if(_case == TU_CASE_UPPER) {
         switch(c) {
 TU_C(223,83,83)TU_C(329,700,78)TU_C(496,74,780)TU_C(912,921,776,769)TU_C(944,933,776,769)TU_C(1415,1333,1362)
 TU_C(7830,72,817)TU_C(7831,84,776)TU_C(7832,87,778)TU_C(7833,89,778)TU_C(7834,65,702)TU_C(8016,933,787)
@@ -777,7 +1255,7 @@ TU_C(64279,1348,1341)
 }
 
 // to_uppercase or to_lowercase result length
-// _case - CASE_UPPER or CASE_LOWER
+// _case - TU_CASE_UPPER or TU_CASE_LOWER
 int tu_case_len(const char *src, int len, int _case) {
     int l = 0;
     for(const char *s = src; s < src + len;) {
@@ -794,10 +1272,6 @@ int tu_case_len(const char *src, int len, int _case) {
     return l;
 }
 
-// to_uppercase or to_lowercase
-// _case - CASE_UPPER or CASE_LOWER
-// movables - indices into src that get modified to point to respective places in dst
-// nm - count of movables
 int tu_case(char *dst, const char *src, int len, int _case, int *movables, int nm) {
     bool *moved_flags = malloc(sizeof(bool) * nm);
     char *_dst = dst;
@@ -807,7 +1281,7 @@ int tu_case(char *dst, const char *src, int len, int _case, int *movables, int n
         char *s_ = tu_step_utf8_cp((char*)s, src + len - s, &c);
         if(s_ == s) { *(dst ++) = *s; s_ ++; goto cnt; }
         uint32_x3_t r = tu_case_cp(c, _case);
-        for(int i = 0; i < r.len; i ++) dst = write_utf8_cp(dst, r.s[i]);
+        for(int i = 0; i < r.len; i ++) dst = tu_write_utf8_cp(dst, r.s[i]);
         cnt:
         for(int i = 0; i < nm; i ++) {
             if(s - src <= movables[i] && movables[i] < s_ - src && !moved_flags[i]) {
@@ -893,34 +1367,17 @@ const int tu_wcwidth_widths[] = {
 };
 
 int tu_wcwidth(uint32_t c) {
-    return tu_wcwidth_widths[tu_binary_search(tu_wcwidth_indices, sizeof tu_wcwidth_indices, c)];
+    return tu_wcwidth_widths[tu_binary_search(tu_wcwidth_indices, sizeof tu_wcwidth_indices / sizeof(uint32_t), c)];
 }
 #endif
 
-// consumes one item from `s`, updating a bunch of state accordingly
-// item is a sequence of bytes that gets displayed "at once", it is one of:
-// - \t: moves cursor to next of 1,9,17,25,... columns
-// - \n: translated into \r\n optionally preceded by clearing rest of line
-// - \v, \f: both passed to terminal as is, both move cursor down 1 line
-// - (\e\[|\x9B|\xC2\x9B)[0-9;]*m (view as regex): changes output appearence; passed as is but using CSI \e[ and appended to color_stack
-// - any other ASCII control (0-31), including \e when not postfixed with "\[[0-9;]*m": displayed as one of U+2400...U+241F ␀␁␂␃␄␅␆␇␈␉␊␋␌␍␎␏␐␑␒␓␔␕␖␗␘␙␚␛␜␝␞␟
-// - printable ASCII (32-126): displayed as is
-// - DEL (ASCII 127): displayed as U+2421 ␡
-// - valid utf8 codepoint with non-negative wcwidth: displayed as is
-// - valid utf8 codepoint with negative wcwidth: displayed as <HEX> where HEX is 4-digit or 8-digit hex of the cp;
-//                                               in inverted colors; to restore colors afterwards, the whole color_stack is printed
-// - a byte >=128, but not a part of a valid utf8 cp: displayed as U+FFFD �
-// ARGS:
-// - s: pointer to the beginning of an item
-// - len: maximum length of the item (length of s)
-// - p (nullable when out is NULL): current position
-// - width: terminal window width, not used when p is NULL
-// - split_wchars: whether printing wide character that does not fit on a line splits it into parts (e.g. on non-graphical TTY)
-//                 or gets it wrapped to the next line as a whole (e.g. in all graphical terminals I tested); not used when p is NULL
-// - out (nullable): where to append what shall go to the terminal
-// - color_stack (nullable when out is NULL): where to append (\e\[|\x9B|\xC2\x9B)[0-9;]*m sequences; used to restore color/appearence
-// - cursor (nullable): a cursor to advanse accourding to the consumed item
-// RETURNS pointer to right after the item
+static bool is_color_reset(char *csi, int len) {
+    len -= 1 + (*csi != '\233');
+    csi += 1 + (*csi != '\233');
+    return len == 1 && *csi == 'm' ||
+           len == 2 && *csi == '0' && csi[1] == 'm';
+}
+
 char *tu_step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str_t *out, str_t *color_stack, cursor_t *cursor) {
     int bytes;
     // == special control items: ==
@@ -966,8 +1423,7 @@ char *tu_step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str
         if(i < len && s[i] == 'm') {
             if(out) { str_append_lit(out, "\33["); str_append(out, s_, s + i + 1 - s_); }
             if(color_stack) {
-                int l = s + i - s_;
-                if(l == 1 && *s_ == '0' || l == 0) color_stack->len = 0; // \e[0m of \e[m erases color stack
+                if(is_color_reset(s, i + 1)) color_stack->len = 0; // \e[0m of \e[m erases color stack
                 else { str_append_lit(color_stack, "\33["); str_append(color_stack, s_, s + i + 1 - s_); }
             }
             bytes = i + 1; goto ret;
@@ -1029,8 +1485,6 @@ char *tu_step_item(char *s, int len, pos_t *p, int width, bool split_wchars, str
     return s + bytes;
 }
 
-// get boundaries of a utf8 cp; like tu_item_boundary
-// return as if single char when not a part of a valid cp
 void tu_utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
     assert(0 <= at && at < len);
     if((s[at] & 0x80) == 0) goto single;
@@ -1054,14 +1508,9 @@ void tu_utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *wi
     if(width) *width = 1;
 }
 
-//int ii = 0;
-
-// get boundaries of the item in `s` that contains `at` byte
-// at should be in [0, len)
-// begin, end - nullable output params
 void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
     // testing for (\e\[|\x9B|\xC2\x9B)[0-9;]*m
-    int csi_test = -1; // after or right on CSI end, strictly before 'm'
+    int csi_test = -1; // after or right on the CSI end, strictly before 'm'
     if(s[at] == ']' || '0' <= s[at] && s[at] <= '9' || s[at] == ';') csi_test = at;
     if(s[at] == 'm') csi_test = at - 1;
     if(s[at] == '\33' || s[at] == '\233') csi_test = at + 1;
@@ -1092,52 +1541,6 @@ void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width
     tu_utf8_cp_boundary(s, len, at, begin, end, width);
 }
 
-// how to find the origin after a window resize
-#define REORIGIN_RESTORE 1 // using save (\e7) + restore (\e8), tested and works in gnu terminal & xfce terminal
-                           // where the origin is adjusted after rewrapping lines, and in xterm where lines are not rewrapped
-#define REORIGIN_COMPUTE 2 // compute assuming lines rawrapping and that the cursor remains on the same char
-                           // used on windows because windows console does not auto-agjust saved pos on rewrap
-
-// content of terminal (editable part starting from "origin")
-// is editable by replacing everything starting at a byte (i.e. keeping a part)
-// should handle resizing given no resize happens while the resize handler is running and the content fits in the window
-// if REORIGIN_RESTORE is used, the origin should be saved via \e7
-// apparently terminals other than windows console that auto-recalculate line wrapping on resizes
-// also auto adjust saved position (only on re-wrapping, not on wripping when writing to the terminal)
-typedef struct {
-    char *s;
-    int len, cap;
-    // int *line_lengths; // visible character counts in logical lines (disregarding wrapping)
-    // int n_lines; // number of logical lines
-    int origin; // y position of origin
-    int width, height; // of terminal window
-    FILE *out; // file pointing to terminal (output only) (presumably just stdout)
-    FILE *in; // file pointing to terminal (input only) (presumably just stdin)
-    bool split_wchars; // behaviour of the terminal when printing a 2-wide character such that it does not fit on a line
-                       // `false` means the whole thing is printed on the next line, `true` means it gets split between lines
-    str_t input_buf; // when checking cursor location, other data than the responce gets put here; also in content_wait_in
-    int cursor_byte; // where the cursor shall point to; in [0, len]; negative means hide cursor and put it anywhere
-    bool cursor_bw; // indicates that on the last render cursor ended up with bouta_wrap=true, thus pointing to previous char to cursor_byte
-    bool resize_pending; // need to process resize before rendering
-    long resize_timeout; // if non-negative, only rerender after this number of ms of no resizes, in content_wait_in, to avoid race conditions
-                         // used on windows, though the necessity of this could've been dictated by testing on a super-laggy vm
-    int error; // gets set to CONT_ERR_* on an error; when non-zero, content is considered corrupted and all content_* funtions on it return immediately
-    int reorigin_method; // REORIGIN_*
-    #if TU_SYSTEM == TU_WINDOWS
-    wchar_t high_surrogate; // temp storage for high utf16 surrogate read from console, to then join with lower surrogate
-                            // 0 when no high surrogate is pending
-    #endif
-} content_t;
-
-// values for content_t.error
-#define CONT_ERR_GETPOS  1
-#define CONT_ERR_GETSIZE 2
-#define CONT_ERR_OUT     3
-#define CONT_ERR_WAIT    4
-#define CONT_ERR_SETUP   5
-#define CONT_ERR_IN      6
-#define CONT_ERR_TEST    7
-
 content_t content_create(FILE *in, FILE *out) {
     content_t t = (content_t){
         .s = NULL, .len = 0, .cap = 0,
@@ -1150,7 +1553,7 @@ content_t content_create(FILE *in, FILE *out) {
         .cursor_bw = false,
         .resize_pending = false,
         #if TU_SYSTEM == TU_WINDOWS
-        .resize_timeout = 100,
+        .resize_timeout = 100, // may be unnecesarily high; only tested on a laggy windows vm
         .reorigin_method = REORIGIN_COMPUTE,
         .high_surrogate = 0
         #else
@@ -1158,21 +1561,21 @@ content_t content_create(FILE *in, FILE *out) {
         .reorigin_method = REORIGIN_RESTORE
         #endif
     };
-    if(term_get_size(t.in, t.out, &t.width, &t.height) < 0)
-        { t.error = CONT_ERR_GETSIZE; return t; }
-    if(fprintf(t.out, "\r" TERM_CURSOR_SAVE) < 0)
-        { t.error = CONT_ERR_OUT; return t; }
-    t.origin = term_get_pos(t.out, t.in, &t.input_buf).y;
-    if(t.origin < 0) t.error = CONT_ERR_GETPOS;
-    #if TU_SYSTEM == TU_UNIX
-    if(setup_resize_watch() < 0) t.error = CONT_ERR_SETUP;
-    #endif
     return t;
 }
 
-// render the content starting at byte `start`
-// refuses to write to terminal if the window has been resized (tu_winch on unix or cap change on windows)
-// in this case t->resize_pending is set and one should first call content_resize
+void content_init(content_t *t) {
+    if(term_get_size(t->in, t->out, &t->width, &t->height) < 0)
+        { t->error = CONT_ERR_GETSIZE; return t; }
+    if(fprintf(t->out, "\r" TERM_CURSOR_SAVE) < 0)
+        { t->error = CONT_ERR_OUT; return t; }
+    t->origin = term_get_pos(t->out, t->in, &t->input_buf).y;
+    if(t->origin < 0) t->error = CONT_ERR_GETPOS;
+    #if TU_SYSTEM == TU_POSIX
+    if(setup_resize_watch() < 0) t->error = CONT_ERR_SETUP;
+    #endif
+}
+
 void content_render_from(content_t *t, int start, bool extra_overwrite) {
     if(t->error || t->resize_pending) return;
     assert(0 <= start && start <= t->len);
@@ -1254,9 +1657,6 @@ void content_render_from(content_t *t, int start, bool extra_overwrite) {
     free(cs.s);
 }
 
-// replace the rest of the content starting from byte `start` with `cont` of length `len`
-// `start` should be in [0, t->len], `len` may be zero
-// also attempts to render replaced part of ccontent (if no resize is pending)
 void content_change(content_t *t, int start, const char *cont, int len) {
     assert(0 <= start && start <= t->len);
     assert(len >= 0);
@@ -1283,17 +1683,15 @@ void content_change(content_t *t, int start, const char *cont, int len) {
 
 // todo: watch over content error from tl
 
-#if TU_SYSTEM == TU_WINDOWS
-#define tu_sleep_ms Sleep
-#else
+#if TU_SYSTEM == TU_POSIX
 void tu_sleep_ms(unsigned long t) {
-    struct timespec ts = tu_ms2ts(t);
+    struct timespec ts = ms2ts(t);
     nanosleep(&ts, NULL);
 }
 #endif
 
 // relative position after writing `s` up to `byte` starting at x=1, i.e. with y starting at 0
-pos_t term_rel_pos(int width, bool split_wchars, char *s, int len, int byte) {
+static pos_t term_rel_pos(int width, bool split_wchars, char *s, int len, int byte) {
     pos_t _p;
     pos_t p = { .x = 1, .y = 0, .bouta_wrap = false };
     char *c = s;
@@ -1305,12 +1703,6 @@ pos_t term_rel_pos(int width, bool split_wchars, char *s, int len, int byte) {
     return _p;
 }
 
-#ifndef TU_SAFETY_DELAY
-#define TU_SAFETY_DELAY 4 // before rerendering we shall get no resize for this number of ms to avoid race conditions
-#endif
-
-// rerender the content assuming the terminal window has been resized
-// width and height have to be set before calling this
 void content_resize(content_t *t) {
     t->resize_pending = false;
     if(t->error) return;
@@ -1353,8 +1745,6 @@ void content_resize(content_t *t) {
     content_render_from(t, 0, true);
 }
 
-// wait for data received on t->in, handling window resizes
-// all received data gets read and put into t->input_buf
 void content_wait_in(content_t *t) {
     if(t->error) return;
     int l = t->input_buf.len;
@@ -1377,13 +1767,13 @@ void content_wait_in(content_t *t) {
 
 #define CURSOR_FROM_BYTE 1 // from `byte` field
 #define CURSOR_FROM_COL  2 // from `row` and `col` fields
-#define CURSOR_FROM_CP 3 // from `row` and `char` fields
+#define CURSOR_FROM_CP   3 // from `row` and `char` fields
 
 // fill all fields of `dst` cursor from certain field, determined by `source`
 // `source` shall be one of CURSOR_FROM_* constants
 // source fiels may be invalid (e.g. out of bounds or `byte` pointing not to start of an item);
 // corrected naturally in this case
-void cursor_restore(const content_t *t, cursor_t *dst, int source) {
+static void cursor_restore(const content_t *t, cursor_t *dst, int source) {
     assert(1 <= source && source <= 3);
 //    DEBUG("+\n");
     cursor_t cur = { 0 };
@@ -1412,36 +1802,17 @@ void cursor_restore(const content_t *t, cursor_t *dst, int source) {
     *dst = cur;
 }
 
-typedef struct {
-    char *s;
-    int len, cap;
-    int cursor, mark;
-    bool mark_weak;
-} lhrec_t; // line history record
-
-tu_implement_arr(lhrec_arr, lhrec_t)
-
-// text formating sequences \e\[[0-9;]*m
-typedef struct {
-    char *s;
-    int len, cap;
-    unsigned int at; // before which byte to put it
-    unsigned int prio; // smaller go first; non-negative only
-} color_t;
-
-#define tu_color(lit, _at, _prio) (color_t){ .s = lit, .len = sizeof(lit) - 1, .at = _at, .prio = _prio }
-
 #define TU_UINT_HIGH_BIT (~((unsigned int)(-1) >> 1))
 
-void color_sort_(color_t *begin, color_t *end, unsigned int bit, int level) {
-    color_t *_begin = begin;
-    color_t *_end = end;
+static void color_sort_(tu_color_t *begin, tu_color_t *end, unsigned int bit, int level) {
+    tu_color_t *_begin = begin;
+    tu_color_t *_end = end;
     while(begin < end) {
         while(begin < end && ((level ? begin->prio : begin->at) & bit) == 0) begin ++;
         while(begin < end &&  (level ? end->prio   : end->at  ) & bit) end --;
-        color_t temp = *begin; *begin = *end; *end = temp;
+        tu_color_t temp = *begin; *begin = *end; *end = temp;
     }
-    color_t *mid = begin + (((level ? begin->prio : begin->at) & bit) == 0);
+    tu_color_t *mid = begin + (((level ? begin->prio : begin->at) & bit) == 0);
     unsigned int bit_ = bit >> 1;
     int level_ = level;
     if(bit_ == 0) {
@@ -1453,99 +1824,23 @@ void color_sort_(color_t *begin, color_t *end, unsigned int bit, int level) {
     if(_end - mid >= 1) color_sort_(mid, _end, bit_, level_);
 }
 
-void color_sort(color_t *f, int len) { if(len >= 2) color_sort_(f, f + len - 1, TU_UINT_HIGH_BIT, 0); }
+static void color_sort(tu_color_t *f, int len) { if(len >= 2) color_sort_(f, f + len - 1, TU_UINT_HIGH_BIT, 0); }
 
-tu_implement_arr(color_arr, color_t)
-
+// input item from stdin
 typedef struct {
-    char *s;
-    int len;
-    int type;
-    uint32_t key;
-    uint32_t c;
-} input_t;
+    char *s; // the exact bytes received from stdin
+    int len; // number of those
+    int type; // way of interpreting those; TU_SEQ_*
+    uint32_t key; // the key; explanation next to KEY_* definitions
+    uint32_t c; // raw utf8 cp for TU_SEQ_UTF8; ignoring esc prefix for esc-prefixed keys (interpreted as MOD_ALT)
+} tu_input_t;
 
-typedef struct termline_s termline_t;
+tu_implement_arr_functions(lhrec_arr, lhrec_t)
+tu_implement_arr_functions(tu_handler_arr, tu_handler_t)
+tu_implement_arr_functions(tu_hist, histrec_t)
+tu_implement_arr_functions(tu_tab_arr, tu_tab_t)
+tu_implement_arr_functions(tu_color_arr, tu_color_t)
 
-// input handlers; called sequentially; each consumes/handles some number of keystrokes/inputs; when no handler consumes an input, it is discarded
-// when a number of inputs is consumed by a different handler [than this one] or an input is discarded, and unhandle [this one] is defined, it is called on those inputs
-typedef struct {
-    // - line: the termline to make changes upon
-    // - t: for reference only; the content currently displayed
-    // - lowest_change: write the lowest byte you've altered in line->s here, if it's lower than the current value of *lowest_change
-    // - inputs: the keystrokes to handle; the handler should consume a numer of consecative keystrokes starting at index 0 that are of the kind this handler cares about
-    // - len: the numer of inputs available
-    // returns: the number of inputs handled/consumed
-    int (*handle)(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len); // not nullable
-
-    void (*unhandle)(termline_t *line, input_t *inputs, int len); // nullable
-} handler_t;
-
-tu_implement_arr(handler_arr, handler_t)
-
-typedef struct {
-    str_t s, e; // original, edited
-    bool edited;
-} histrec_t;
-
-tu_implement_arr(hist, histrec_t)
-
-typedef struct {
-    char *s;
-    int len, cap;
-    int ignored;
-} tab_t;
-
-tu_implement_arr(tab_arr, tab_t)
-
-struct termline_s {
-    char *s; // the entered text
-    int len, cap;
-    int cursor, mark; // the selection is from mark to cursor; no selection when mark < 0
-    bool mark_weak; // like just after yanking when moving around removes selection; meaningless when mark < 0
-
-    int magnet; // the column where the cursor "magnets" towards when navigating up/down; -1 for current cursor culumn
-
-    int char_search; // usually 0; after CTRL+]: +1 after ALT+CTRL+]: -1
-
-    lhrec_arr_t lh; // inline history (undo/redo)
-    int lh_idx;
-    int lhrec_type; // one of LHREC_*; lhrec is saved when we get an lhrec of a different type or LHREC_INDEP
-                    // to prevent saving like after each small edit
-
-    hist_t hist; // command history
-    int hist_idx;
-
-    int hist_search; // 0 when not in search, 1 for forward, -1 for backwards
-    str_t search; // search string
-    bool search_success;
-
-    FILE *in, *out;
-    str_t prompt;
-    str_t nl_prompt;
-
-    str_arr_t killring;
-    int kr_idx;
-
-    handler_arr_t handlers;
-
-    tab_arr_t tab_compls;
-    int tab_option;
-
-    void (*tab_callback)(struct termline_s* line, const input_t *tab);
-
-    int (*callback)(struct termline_s* line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed);
-    color_arr_t highlights;
-    str_t hint; // inline hint shown at the cursor; is set to len=0 when in search mode
-    str_t preview; // lone shown at the bottom; just not displayed when in search mode
-
-    str_t selection_begin, selection_end; // how to highlight selection; should be ANI CSs, \e\[[0-9;]*m
-    int selection_prio; // priority of selection colors
-    int reselection_prio; // priority of reintroducing selection_begin after a user's color reset (\e[0m or \e[m) within the selection
-    int hint_prio; // priority of hint string relative to colors
-};
-
-// go to history entry i and save the current one
 void tl_hist(termline_t *line, int i) {
     if(i == line->hist_idx) return;
     if(line->hist.len <= line->hist_idx) {
@@ -1564,32 +1859,11 @@ void tl_hist(termline_t *line, int i) {
     line->hist_idx = i;
 }
 
-void tl_set_prompt(termline_t *line, const char *s, int len) {
-    line->prompt.len = 0;
-    str_append(&line->prompt, s, len);
-}
-
-void tl_set_nl_prompt(termline_t *line, const char *s, int len) {
-    line->nl_prompt.len = 0;
-    str_append(&line->nl_prompt, s, len);
-}
-
 void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignred_part) {
-    tab_t compl = { NULL, .ignored = ignred_part };
+    tu_tab_t compl = { NULL, .ignored = ignred_part };
     str_append((str_t*)&compl, s, len);
     tab_arr_append(&line->tab_compls, &compl, 1);
 }
-
-// types of modifications an lhrec could be saved after
-#define LHREC_INIT           0
-#define LHREC_INSERT_WORD    1
-#define LHREC_INSERT_NONWORD 2
-#define LHREC_KILL_WORD      3
-#define LHREC_KILL_NONWORD   4
-#define LHREC_YANK           5
-#define LHREC_HIST           6
-#define LHREC_TAB            7
-#define LHREC_INDEP          8
 
 void tl_lhrec(termline_t *line, int type, bool advanse) {
     if(line->lhrec_type != type || type == LHREC_INDEP) {
@@ -1607,77 +1881,32 @@ void tl_lhrec(termline_t *line, int type, bool advanse) {
     line->lhrec_type = type;
 }
 
-#define TERM_SEQ_INVALID -1
-#define TERM_SEQ_UNKNOWN  0
+#define TU_SEQ_INVALID -1 // invalid bytes after a CSI, SS2 of SS3; reiterpreted as plain ASCII/utf8 input afterwards
+#define TU_SEQ_UNKNOWN  0 // unfinished temporary unknown seq; waiting for continuation
 
-#define TERM_SEQ_CSI      1
-#define TERM_SEQ_SS2      2
-#define TERM_SEQ_SS3      3
-#define TERM_SEQ_UTF8     4
+#define TU_SEQ_CSI      1
+#define TU_SEQ_SS2      2
+#define TU_SEQ_SS3      3
+#define TU_SEQ_UTF8     4
 
-#define KEY_UNKNOWN    (uint32_t)-2
-#define KEY_INVALID_CP (uint32_t)-1
-#define KEY_HOME           0x200001
-#define KEY_INSERT         0x200002
-#define KEY_DELETE         0x200003
-#define KEY_END            0x200004
-#define KEY_PAGEUP         0x200005
-#define KEY_PAGEDOWN       0x200006
-#define KEY_F1             0x20000B
-#define KEY_F2             0x20000C
-#define KEY_F3             0x20000D
-#define KEY_F4             0x20000E
-#define KEY_F5             0x20000F
-#define KEY_F6             0x200011
-#define KEY_F7             0x200012
-#define KEY_F8             0x200013
-#define KEY_F9             0x200014
-#define KEY_F10            0x200015
-#define KEY_F11            0x200017
-#define KEY_F12            0x200018
-#define KEY_F13            0x200019
-#define KEY_F14            0x20001A
-#define KEY_F15            0x20001C
-#define KEY_F16            0x20001D
-#define KEY_F17            0x20001F
-#define KEY_F18            0x200020
-#define KEY_F19            0x200021
-#define KEY_F20            0x200022
-#define KEY_ENTER          0x200100
-#define KEY_BACKSPACE      0x200101
-#define KEY_ESCAPE         0x200102
-#define KEY_TAB            0x200103
-#define KEY_UP             0x200201
-#define KEY_DOWN           0x200202
-#define KEY_RIGHT          0x200203
-#define KEY_LEFT           0x200204
-
-#define NON_CHAR           0x3E00000
-#define NON_MOD            0x03FFFFF
-
-#define MOD_CTRL           0x0400000
-#define MOD_ALT            0x0800000
-#define MOD_SHIFT          0x1000000
-#define MOD_NUMPAD         0x2000000
-
-input_t parse_CSI(char *_s, int len, bool *finished) {
+static tu_input_t parse_CSI(char *_s, int len, bool *finished) {
     *finished = true;
     unsigned char *s = (unsigned char*)_s + (*_s != '\233') + 1;
     len -= (*_s != '\233') + 1;
     if(len == 1 && *s == '[')
-        { *finished = false; return (input_t){ .type = TERM_SEQ_CSI, .s = s, .len = len }; }
+        { *finished = false; return (tu_input_t){ .type = TU_SEQ_CSI, .s = s, .len = len }; }
     if(len >= 2 && *s == '[' && 'A' <= s[2] && s[2] <= 'E')
-        { *finished = true; return (input_t){ .type = TERM_SEQ_CSI, .s = s, .len = 2 }; }
+        { *finished = true; return (tu_input_t){ .type = TU_SEQ_CSI, .s = s, .len = 2 }; }
     // ^ linux TTY sequences for F1-F5
     unsigned char *c = s;
     for(; c - s < len && 0x30 <= *c && *c < 0x40; c ++);
     if(c - s < len && !(0x40 <= *c && *c <= 0x7E)) // invalid termination
-        return (input_t){ .type = TERM_SEQ_INVALID };
+        return (tu_input_t){ .type = TU_SEQ_INVALID };
     if(c - s >= len) *finished = false;
-    return (input_t){ .type = TERM_SEQ_CSI, .s = s, .len = c - s + 1 };
+    return (tu_input_t){ .type = TU_SEQ_CSI, .s = s, .len = c - s + 1 };
 }
 
-input_t parse_esc_seq(char *s, int len, bool *finished) {
+static tu_input_t parse_esc_seq(char *s, int len, bool *finished) {
     *finished = true;
     bool is_CSI = (*s == '\33' && len >= 2 && s[1] == '[') ||  // regular CSI
                   (*s == '\233' && len >= 1)                ||  // CSI char (\x9B)
@@ -1689,7 +1918,7 @@ input_t parse_esc_seq(char *s, int len, bool *finished) {
                   (*s == '\217' && len >= 1)                ||
                   (*s == '\302' && len >= 2 && s[1] == '\217');
     if(*s != '\33' && *s != '\233' && *s != '\216' && *s != '\217' && *s != '\302') goto err;
-    if(len == 1) { *finished = false; return (input_t){ .type = TERM_SEQ_UNKNOWN }; }
+    if(len == 1) { *finished = false; return (tu_input_t){ .type = TU_SEQ_UNKNOWN }; }
     if(!is_CSI && !is_SS2 && !is_SS3) goto err;
     if(is_CSI) return parse_CSI(s, len, finished);
     if(is_SS2 || is_SS3) {
@@ -1697,20 +1926,20 @@ input_t parse_esc_seq(char *s, int len, bool *finished) {
         int l = len - (*s != (is_SS2 ? '\216' : '\217')) - 1;
         if(l <= 0) {
             *finished = false;
-            return (input_t){ .type = is_SS2 ? TERM_SEQ_SS2 : TERM_SEQ_SS3, .s = s_, .len = 0 };
+            return (tu_input_t){ .type = is_SS2 ? TU_SEQ_SS2 : TU_SEQ_SS3, .s = s_, .len = 0 };
         }
-        if(*s_ < 0x20 || *s_ >= 0x80) return (input_t){ .type = TERM_SEQ_INVALID };
-        return (input_t){ .type = is_SS2 ? TERM_SEQ_SS2 : TERM_SEQ_SS3, .s = s_, .len = 1 };
+        if(*s_ < 0x20 || *s_ >= 0x80) return (tu_input_t){ .type = TU_SEQ_INVALID };
+        return (tu_input_t){ .type = is_SS2 ? TU_SEQ_SS2 : TU_SEQ_SS3, .s = s_, .len = 1 };
     }
     err:
-    return (input_t){ .type = TERM_SEQ_INVALID };
+    return (tu_input_t){ .type = TU_SEQ_INVALID };
 }
 
-char *tu_step_input(char *s, int len, input_t *in) {
+char *tu_step_input(char *s, int len, tu_input_t *in) {
     bool finished;
     *in = parse_esc_seq(s, len, &finished);
     if(!finished) return NULL;
-    if(in->type == TERM_SEQ_CSI || in->type == TERM_SEQ_SS3) {
+    if(in->type == TU_SEQ_CSI || in->type == TU_SEQ_SS3) {
         if(in->len == 2 && in->s[0] == '[' && 'A' <= in->s[1] && in->s[1] <= 'E')
             { in->key = KEY_F1 + in->s[1] - 'A'; goto ret; }
         if(in->len > 5)
@@ -1739,13 +1968,13 @@ char *tu_step_input(char *s, int len, input_t *in) {
         else if(('P' <= c && c <= 'S') && k == 1) in->key = (KEY_F1 + (c - 'P')) | modifiers;
         else if(c == 'H' && k == 1) in->key = KEY_HOME  | modifiers;
         else if(c == 'F' && k == 1) in->key = KEY_END   | modifiers;
-        else if(c == 'M' && k == 1) in->key = KEY_ENTER | modifiers | (in->type == TERM_SEQ_SS3 ? MOD_NUMPAD : 0);
-        else if('A' <= c && c <= 'D' && k == 1) in->key = (KEY_UP + c - 'A') | modifiers | (in->type == TERM_SEQ_SS3 ? MOD_NUMPAD : 0);
-        else if('j' <= c && c <= 'y' && k == 1) in->key = (uint32_t)(c - 'j' + '*') | modifiers | (in->type == TERM_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else if(c == 'M' && k == 1) in->key = KEY_ENTER | modifiers | (in->type == TU_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else if('A' <= c && c <= 'D' && k == 1) in->key = (KEY_UP + c - 'A') | modifiers | (in->type == TU_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else if('j' <= c && c <= 'y' && k == 1) in->key = (uint32_t)(c - 'j' + '*') | modifiers | (in->type == TU_SEQ_SS3 ? MOD_NUMPAD : 0);
         else in->key = KEY_UNKNOWN;
         ret:
         return in->s + in->len;
-    } else if(in->type != TERM_SEQ_INVALID) {
+    } else if(in->type != TU_SEQ_INVALID) {
         in->key = KEY_UNKNOWN;
         return in->s + in->len;
     }
@@ -1755,9 +1984,9 @@ char *tu_step_input(char *s, int len, input_t *in) {
     char *s_ = tu_step_utf8_cp_partial(s, len, &in->c);
 //    printf("\r\n[%i]", s_ - s);
     if(s_ > s + len) return NULL;
-    in->s = s;
-    in->type = TERM_SEQ_UTF8;
-    in->len = s_ - s;
+    in->s = s - esc;
+    in->type = TU_SEQ_UTF8;
+    in->len = s_ - s + esc;
     if(s_ == s) {
         if(esc) goto esc;
         in->key = KEY_INVALID_CP;
@@ -1795,18 +2024,7 @@ int tl_cont2text(termline_t *line, int cursor_byte) {
     return i + 1;
 }
 
-bool is_color_reset(char *csi, int len) {
-    len -= 1 + (*csi != '\233');
-    csi += 1 + (*csi != '\233');
-    return len == 1 && *csi == 'm' ||
-           len == 2 && *csi == '0' && csi[1] == 'm';
-}
-
-// translate text byte position into content byte position
-// colors are accounted for when provided (non NULL)
-// a color with at=n goes between bytes n-1 and n, but with text_byte=n it is not accounted for
-// i.e. colors are "coupled" with bytes their `at`s point to
-int tl_text2cont(termline_t *line, int text_byte, color_arr_t *colors) {
+int tl_text2cont(termline_t *line, int text_byte, tu_color_arr_t *colors) {
     int newlines = 0;
     int color_bytes = 0;
     int color_bytes_skipped = 0;
@@ -1865,7 +2083,6 @@ void tl_kill(termline_t *line, int at, int len, bool to_killring) {
     line->len -= s.len;
 }
 
-// returns length increment (neg. for dec.)
 int tl_case(termline_t *line, int at, int len, int _case) {
     str_t s = str_substr((str_t*)line, at, len);
     int len_ = tu_case_len(s.s, s.len, _case);
@@ -1882,8 +2099,7 @@ int tl_case(termline_t *line, int at, int len, int _case) {
     return len_ - len;
 }
 
-// colors have to be sorted
-void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bool include_prompt, bool include_decorations) {
+void tl_compose(termline_t *line, int start, str_t *out, tu_color_arr_t *colors, bool include_prompt, bool include_decorations) {
     str_stretch(out, line->len - start + include_prompt * line->prompt.len);
     out->len = include_prompt * line->prompt.len;
     if(include_prompt) memcpy(out->s, line->prompt.s, line->prompt.len);
@@ -1941,7 +2157,7 @@ void tl_compose(termline_t *line, int start, str_t *out, color_arr_t *colors, bo
     } else str_append(out, line->preview.s, line->preview.len);
 }
 
-bool tu_is_wordy(char c, int big) {
+static bool tu_is_wordy(char c, int big) {
     return ('0' <= c && c <= '9') ||
            ('A' <= c && c <= 'Z') ||
            ('a' <= c && c <= 'z') ||
@@ -1950,7 +2166,7 @@ bool tu_is_wordy(char c, int big) {
            (unsigned char)c > 0x20 && c != '\377' && big;
 }
 
-int tl_handle_text(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_text(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     str_t temp = { NULL };
     for(; len > 0; len --, inputs ++) {
@@ -1967,7 +2183,7 @@ int tl_handle_text(termline_t *line, content_t *t, int *lowest_change, input_t *
     return _len - len;
 }
 
-int search_back_word(char *s, int byte, bool big) {
+int tu_search_back_word(char *s, int byte, bool big) {
     if(byte == 0) return 0;
     int got_word = false;
     for(int i = byte - 1; i >= 0; i --) {
@@ -1977,7 +2193,7 @@ int search_back_word(char *s, int byte, bool big) {
     return 0;
 }
 
-int search_forward_word(char *s, int len, int byte, bool big) {
+int tu_search_forward_word(char *s, int len, int byte, bool big) {
     int got_word = false;
     for(int i = byte; i < len; i ++) {
         if(tu_is_wordy(s[i], big)) got_word = true;
@@ -2039,7 +2255,7 @@ void tl_move_H(termline_t *line, int move) {
 //    return ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 //}
 
-int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     content_t _t = *t;
     _t.s = NULL; _t.len = 0; _t.cap = 0;
     int _len = len;
@@ -2075,8 +2291,8 @@ int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, input_t
         }
         else if(k == KEY_UP    && (key & MOD_CTRL) == 0) tl_move_v(line, &_t, -1);
         else if(k == KEY_DOWN  && (key & MOD_CTRL) == 0) tl_move_v(line, &_t, 1);
-        else if(k == KEY_RIGHT && (key & MOD_CTRL) || (k == 'f' || k == 'F') && (key & MOD_ALT)) line->cursor = search_forward_word(line->s, line->len, line->cursor, false);
-        else if(k == KEY_LEFT  && (key & MOD_CTRL) || (k == 'b' || k == 'B') && (key & MOD_ALT)) line->cursor = search_back_word(line->s, line->cursor, false);
+        else if(k == KEY_RIGHT && (key & MOD_CTRL) || (k == 'f' || k == 'F') && (key & MOD_ALT)) line->cursor = tu_search_forward_word(line->s, line->len, line->cursor, false);
+        else if(k == KEY_LEFT  && (key & MOD_CTRL) || (k == 'b' || k == 'B') && (key & MOD_ALT)) line->cursor = tu_search_back_word(line->s, line->cursor, false);
         else if(k == KEY_LEFT  || k == 'B' && (key & MOD_CTRL)) tl_move_h(line, -1);
         else if(k == KEY_RIGHT || k == 'F' && (key & MOD_CTRL)) tl_move_h(line, 1);
         else if(k == KEY_HOME  || k == 'A' && (key & MOD_CTRL)) tl_move_H(line, -1);
@@ -2091,7 +2307,7 @@ int tl_handle_arrows(termline_t *line, content_t *t, int *lowest_change, input_t
 
 // todo: process Ctrl+J (\n)
 
-int tl_handle_kills(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_kills(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     int at = line->cursor, l = 0;
     for(; len > 0; len --, inputs ++) {
@@ -2107,14 +2323,14 @@ int tl_handle_kills(termline_t *line, content_t *t, int *lowest_change, input_t 
             }
         } else if(k == 'W' && (key & MOD_CTRL) || k == KEY_BACKSPACE && (key & MOD_ALT)) {
             if(at > 0) {
-                int i = search_back_word(line->s, at, key == ('W' | MOD_CTRL));
+                int i = tu_search_back_word(line->s, at, key == ('W' | MOD_CTRL));
                 tl_lhrec(line, LHREC_INDEP, true);
                 tl_kill(line, i, at - i, true);
                 at = i;
             }
         } else if((k == 'd' || k == 'D') && (key & MOD_ALT)) {
             if(at + l < line->len) {
-                int i = search_forward_word(line->s, line->len, at + l, false);
+                int i = tu_search_forward_word(line->s, line->len, at + l, false);
                 tl_lhrec(line, LHREC_INDEP, true);
                 tl_kill(line, at + l, i - at - l, true);
             }
@@ -2157,7 +2373,7 @@ int tl_handle_kills(termline_t *line, content_t *t, int *lowest_change, input_t 
 }
 
 // pastes at cursor or replacing selection, leaving weak selection
-void tl_paste_(termline_t *line, int *lowest_change, char *s, int len) {
+static void tl_paste_(termline_t *line, int *lowest_change, char *s, int len) {
     if(line->mark >= 0) {
         int b = line->mark > line->cursor ? line->cursor : line->mark;
         int e = line->mark > line->cursor ? line->mark : line->cursor;
@@ -2180,7 +2396,7 @@ void tl_paste_(termline_t *line, int *lowest_change, char *s, int len) {
     line->mark_weak = true;
 }
 
-int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2217,7 +2433,7 @@ int tl_handle_yanks(termline_t *line, content_t *t, int *lowest_change, input_t 
     return _len - len;
 }
 
-void tl_unhandle_yanks(termline_t *line, input_t *inputs, int len) {
+void tl_unhandle_yanks(termline_t *line, tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
         uint32_t k = key & NON_MOD;
@@ -2229,7 +2445,7 @@ void tl_unhandle_yanks(termline_t *line, input_t *inputs, int len) {
     }
 }
 
-int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2247,12 +2463,12 @@ int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, input_t 
                 if(cb <= *lowest_change) *lowest_change = cb - 1;
             }
         } else if((k == 't' || k == 'T') && (key & MOD_ALT)) {
-            int i = search_back_word(line->s, line->cursor, k == 'T');
-            i = search_back_word(line->s, i, k == 'T');
-            int e1 = search_forward_word(line->s, line->len, i, k == 'T');
-            int e2 = search_forward_word(line->s, line->len, e1, k == 'T');
-            int s1 = search_back_word(line->s, e1, k == 'T');
-            int s2 = search_back_word(line->s, e2, k == 'T');
+            int i = tu_search_back_word(line->s, line->cursor, k == 'T');
+            i = tu_search_back_word(line->s, i, k == 'T');
+            int e1 = tu_search_forward_word(line->s, line->len, i, k == 'T');
+            int e2 = tu_search_forward_word(line->s, line->len, e1, k == 'T');
+            int s1 = tu_search_back_word(line->s, e1, k == 'T');
+            int s2 = tu_search_back_word(line->s, e2, k == 'T');
             if(s2 >= e1) {
                 tl_lhrec(line, LHREC_INDEP, true);
                 char *s = malloc(e2 - s1);
@@ -2269,7 +2485,7 @@ int tl_handle_swaps(termline_t *line, content_t *t, int *lowest_change, input_t 
     return _len - len;
 }
 
-int tl_handle_controls(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_controls(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2286,7 +2502,7 @@ int tl_handle_controls(termline_t *line, content_t *t, int *lowest_change, input
     return _len - len;
 }
 
-int tl_handle_case(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_case(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2299,16 +2515,16 @@ int tl_handle_case(termline_t *line, content_t *t, int *lowest_change, input_t *
                 E = line->mark > line->cursor ? line->mark : line->cursor;
             } else if(line->cursor < line->len) {
                 b = line->cursor;
-                E = search_forward_word(line->s, line->len, line->cursor, false);
+                E = tu_search_forward_word(line->s, line->len, line->cursor, false);
             }
             if(b >= 0) {
                 int e;
                 tu_utf8_cp_boundary(line->s, line->len, b, &b, &e, NULL);
                 if(k == 'c' || k == 'C') {
-                    int c = tl_case(line, b, e - b, CASE_UPPER);
-                    tl_case(line, e + c, E - e, CASE_LOWER);
+                    int c = tl_case(line, b, e - b, TU_CASE_UPPER);
+                    tl_case(line, e + c, E - e, TU_CASE_LOWER);
                 } else {
-                    tl_case(line, b, E - b, k == 'u' || k == 'U' ? CASE_UPPER : CASE_LOWER);
+                    tl_case(line, b, E - b, k == 'u' || k == 'U' ? TU_CASE_UPPER : TU_CASE_LOWER);
                 }
                 if(*lowest_change > b) *lowest_change = b;
             }
@@ -2317,7 +2533,7 @@ int tl_handle_case(termline_t *line, content_t *t, int *lowest_change, input_t *
     return _len - len;
 }
 
-int tl_handle_lh(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_lh(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     int _lh_idx = line->lh_idx;
     for(; len > 0; len --, inputs ++) {
@@ -2350,7 +2566,7 @@ int tl_handle_lh(termline_t *line, content_t *t, int *lowest_change, input_t *in
     return _len - len;
 }
 
-int str_search(char *s, int len, char *sub, int sub_len) {
+static int str_search(char *s, int len, char *sub, int sub_len) {
     if(sub_len == 0) return 0;
     for(int i = 0; i <= len - sub_len; i ++) {
         if(memcmp(s + i, sub, sub_len) == 0) return i;
@@ -2358,7 +2574,7 @@ int str_search(char *s, int len, char *sub, int sub_len) {
     return -1;
 }
 
-int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     bool multiline = false;
     for(int i = 0; i < line->len; i ++) multiline |= (line->s[i] == '\n');
@@ -2410,7 +2626,7 @@ int tl_handle_hist(termline_t *line, content_t *t, int *lowest_change, input_t *
     return _len - len;
 }
 
-void tl_unhandle_hist(termline_t *line, input_t *inputs, int len) {
+void tl_unhandle_hist(termline_t *line, tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
         uint32_t k = key & NON_MOD;
@@ -2419,7 +2635,7 @@ void tl_unhandle_hist(termline_t *line, input_t *inputs, int len) {
     }
 }
 
-int tl_handle_tabs(termline_t *line, content_t *t, int *lowest_change, input_t *inputs, int len) {
+int tl_handle_tabs(termline_t *line, content_t *t, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2428,7 +2644,7 @@ int tl_handle_tabs(termline_t *line, content_t *t, int *lowest_change, input_t *
             if(line->tab_compls.len) {
                 if(line->tab_option < 0) line->mark = -1;
                 if(++ line->tab_option >= line->tab_compls.len) line->tab_option = 0;
-                tab_t y = line->tab_compls.p[line->tab_option];
+                tu_tab_t y = line->tab_compls.p[line->tab_option];
                 tl_paste_(line, lowest_change, y.s + y.ignored, y.len - y.ignored);
             } else if(line->tab_callback) {
                 line->tab_callback(line, inputs);
@@ -2454,7 +2670,7 @@ int tl_handle_tabs(termline_t *line, content_t *t, int *lowest_change, input_t *
     return _len - len;
 }
 
-void tl_unhandle_tabs(termline_t *line, input_t *inputs, int len) {
+void tl_unhandle_tabs(termline_t *line, tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
         uint32_t k = key & NON_MOD;
@@ -2466,7 +2682,7 @@ void tl_unhandle_tabs(termline_t *line, input_t *inputs, int len) {
     }
 }
 
-int tl_process_input(termline_t *line, content_t *t, input_t *inputs, int len) {
+int tl_process_input(termline_t *line, content_t *t, tu_input_t *inputs, int len) {
     bool _normal_mode = !line->hist_search && !line->tab_compls.len;
     int lowest_change = line->len;
     int _len = line->len;
@@ -2523,43 +2739,45 @@ termline_t tl_create(FILE *in, FILE *out) {
         .selection_end = tu_str(TERM_COLOR_UNUNDERLINE),
         .selection_prio = 256,
         .reselection_prio = 1024,
-        .hint_prio = 4096
+        .hint_prio = 4096,
+        .content = content_create(in, out)
     };
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_controls }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_hist, .unhandle = tl_unhandle_hist }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_lh }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_case }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_swaps }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_yanks, .unhandle = tl_unhandle_yanks }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_kills }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_arrows }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_text }, 1);
-    handler_arr_append(&line.handlers, &(handler_t){ .handle = tl_handle_tabs, .unhandle = tl_unhandle_tabs }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_controls }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_hist, .unhandle = tl_unhandle_hist }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_lh }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_case }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_swaps }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_yanks, .unhandle = tl_unhandle_yanks }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_kills }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_arrows }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_text }, 1);
+    handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_tabs, .unhandle = tl_unhandle_tabs }, 1);
     return line;
 }
 
 void tl_interact(termline_t *line) {
     term_set_raw(line->in, line->out); // todo: proper control
-    content_t t = content_create(line->in, line->out);
-    color_arr_t colors = { NULL };
-    color_arr_t _colors = { NULL };
+    content_t *t = &line->content;
+    content_init(t);
+    tu_color_arr_t colors = { NULL };
+    tu_color_arr_t _colors = { NULL };
     cursor_t cursor = { .byte = line->prompt.len };
-    t.cursor_byte = cursor.byte;
-    content_change(&t, 0, line->prompt.s, line->prompt.len);
+    t->cursor_byte = cursor.byte;
+    content_change(t, 0, line->prompt.s, line->prompt.len);
     str_t temp = { .s = NULL, .len = 0, .cap = 0 };
     for(;;) {
-//        int x = term_get_pos(stdout, stdin, &t.input_buf).x;
+//        int x = term_get_pos(stdout, stdin, t->input_buf).x;
 ////        printf("\r\n%i\r\n", x);
 //        printf("\33[9999D\33[20C");
 ////        for(int i = 0; i < line->len; i ++) printf("%X ", (unsigned char)line->s[i]);
-//        for(int i = 0; i < t.len; i ++) { if(t.s[i] >= 0x20) printf("%c", t.s[i]); else printf("{%X}", (unsigned char)t.s[i]); }
+//        for(int i = 0; i < t->len; i ++) { if(t->s[i] >= 0x20) printf("%c", t->s[i]); else printf("{%X}", (unsigned char)t->s[i]); }
 //        printf("\33[9999D\33[%iC", x - 1);
 //        fflush(stdout);
-        content_wait_in(&t);
-        char *s = t.input_buf.s;
-        int len = t.input_buf.len;
+        content_wait_in(t);
+        char *s = t->input_buf.s;
+        int len = t->input_buf.len;
         int i;
-        input_t *inputs = malloc(len * sizeof(input_t));
+        tu_input_t *inputs = malloc(len * sizeof(tu_input_t));
         int n = 0;
         for(i = 0; i < len;) {
             char *s_ = tu_step_input(s + i, len - i, inputs + n);
@@ -2568,30 +2786,30 @@ void tl_interact(termline_t *line) {
             i = s_ - s;
         }
         int _cursor = line->cursor;
-        int lowest_change = tl_process_input(line, &t, inputs, n);
+        int lowest_change = tl_process_input(line, t, inputs, n);
         free(inputs);
         memmove(s, s + i, len - i);
-        t.input_buf.len -= i;
+        t->input_buf.len -= i;
         if(lowest_change < 0) {
-            t.cursor_byte = tl_text2cont(line, line->cursor, &colors);
-            content_change(&t, t.len, NULL, 0);
+            t->cursor_byte = tl_text2cont(line, line->cursor, &colors);
+            content_change(t, t->len, NULL, 0);
             continue;
         }
         colors.len = 0;
         if(line->mark >= 0 && line->mark != line->cursor) {
             int b = line->mark > line->cursor ? line->cursor : line->mark;
             int e = line->mark > line->cursor ? line->mark : line->cursor;
-            color_arr_append(&colors, &(color_t){
+            color_arr_append(&colors, &(tu_color_t){
                     .s = line->selection_begin.s, .len = line->selection_begin.len, .at = b, .prio = line->selection_prio
             }, 1);
-            color_arr_append(&colors, &(color_t){
+            color_arr_append(&colors, &(tu_color_t){
                     .s = line->selection_end.s  , .len = line->selection_end.len  , .at = e, .prio = line->selection_prio
             }, 1);
             for(int i = 0; i < line->highlights.len; i ++) {
-                color_t c = line->highlights.p[i];
+                tu_color_t c = line->highlights.p[i];
                 if(c.at < b || c.at == b && c.prio < line->selection_prio || c.at >= e) continue;
                 if(is_color_reset(c.s, c.len))
-                    color_arr_append(&colors, &(color_t){
+                    color_arr_append(&colors, &(tu_color_t){
                             .s = line->selection_begin.s, .len = line->selection_begin.len, .at = c.at, .prio = line->reselection_prio
                     }, 1);
             }
@@ -2601,13 +2819,16 @@ void tl_interact(termline_t *line) {
 //        for(int i = 0; i < colors.len; i ++) DEBUG("[%i %i] ", colors.p[i].at, colors.p[i].prio);
 //        DEBUG("\n");
         temp.len = 0;
-        tl_compose(line, lowest_change, &temp, &colors, false, true);
-        t.cursor_byte = tl_text2cont(line, line->cursor, &colors);
+        tl_compose(line, lowest_change, temp, &colors, false, true);
+        t->cursor_byte = tl_text2cont(line, line->cursor, &colors);
         int at = tl_text2cont(line, lowest_change, &colors);
 //        DEBUG("%i -> %i %i\n", lowest_change, at, colors.len);
-        content_change(&t, at, temp.s, temp.len);
+        content_change(t, at, temp.s, temp.len);
     }
     ret:
     free(temp.s);
 }
+
+#endif
+#endif
 
