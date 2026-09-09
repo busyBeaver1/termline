@@ -1,4 +1,67 @@
+//int mm = 0;
+
+#define TERMLINE_IMPLEMENTATION 1
 #include "term.c"
+
+#include <locale.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdio.h>
+
+char *help_message =
+"Most keybinds are bash/zsh -like, with some differences\n"
+"Keybinds:\n"
+"Any Unicode or non-control ASCII: Insert in place of cursor and move\n"
+"                                  to the right\n"
+"Enter: Insert a newline or stop editing, depending on the return of a\n"
+"       user-defined callback\n"
+"Backspace or Ctrl+H: Delete character to the left of cursor\n"
+"Delete or Ctrl+D (on non-empty line): Delete character under cursor\n"
+"Ctrl+U: Kill from cursor to beginning of line\n"
+"Ctrl+K: Kill from cursor to end of line\n"
+"Alt+w: Kill selected text\n"
+"Ctrl+W: Kill from cusor to Word (space-delimited) beginning\n"
+"Alt+Backspace: Kill from cusor to word ([0-9a-zA-Z_] and any\n"
+"               non-ASCII Unicode) beginning\n"
+"Alt+D: Kill from cusor to word ([0-9a-zA-Z_] and any non-ASCII\n"
+"       Unicode) end\n"
+"Ctrl+2 or Ctrl+@ or Ctrl+Space: Set mark, denoting a boundary of\n"
+"                                selection\n"
+"Ctrl+X, Alt+x: Swap cursor with mark; if one does not exist, place\n"
+"               it at the beginning or at the end respectively\n"
+"Ctrl+Y: Paste and select text from last entry of killring, ignoring\n"
+"        existing selection\n"
+"Alt+y: Paste and select text, scrolling through killring, replacing\n"
+"       existing selection\n"
+"Ctrl+T: Swap character under cursor with one to the left and move\n"
+"        right\n"
+"Alt+t, Alt+T: Swap word ([0-9a-zA-Z_] and any non-ASCII Unicode) or\n"
+"              Word (space-delimited) under cursor with one to the\n"
+"              left and move right, respectively\n"
+"Ctrl+C: Stop editing, leaving the appearence as is (hints,\n"
+"        selection etc)\n"
+"Ctrl+L: Rerender all content\n"
+"Ctrl+D: On empty line: exit; On non-empty line: delete character\n"
+"        under cursor (like Delete)\n"
+"Alt+c, Alt+u, Alt+l: Capitalize, Uppercase or Lowercase a word\n"
+"                     (starting at cursor) or selection (if one exists)\n"
+"Ctrl+7 or Ctrl+_ or Ctrl+/: Undo last edit\n"
+"Ctrl+6 or Ctrl+^: Redo last Undo\n"
+"Left or Ctrl+B: Move cursor left 1 character\n"
+"Right or Ctrl+F: Move cursor right 1 character\n"
+"Home or Ctrl+A: Move cursor to line beginning\n"
+"End or Ctrl+E: Move cursor to line end\n"
+"Ctrl+]+CHAR: Move cursor to first appearence of CHAR to the right\n"
+"Alt+Ctrl+]+CHAR: Move cursor to first appearence of CHAR to the left\n"
+"Up, Down: In multiline mode: Navigate through lines; In single-line\n"
+"          mode: Scroll history\n"
+"Ctrl+P or Ctrl+Up: Scroll history up\n"
+"Ctrl+P or Ctrl+Down: Scroll history down\n"
+"Ctrl+R, Ctrl+S: Search history backwards or forwards respectively\n"
+"Tab, Shift+Tab: Insert the completion if just one is available, or\n"
+"                scroll through completions forwards or backwards\n"
+"                respectively\n"
+"Clrl+G: Remove selection, exit tab menu or search mode\n";
 
 char *hinted_words[] = { "Lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore", "magna", "aliqua", "Ut", "enim", "ad", "minim", "veniam", "quis", "nostrud", "exercitation", "ullamco", "laboris", "nisi", "aliquip", "ex", "ea", "commodo", "consequat", "Duis", "aute", "irure", "in", "reprehenderit", "voluptate", "velit", "esse", "cillum", "eu", "fugiat", "nulla", "pariatur", "Excepteur", "sint", "occaecat", "cupidatat", "non", "proident", "sunt", "culpa", "qui", "officia", "deserunt", "mollit", "anim", "id", "est", "laborum" };
 
@@ -19,43 +82,89 @@ int get_completions(termline_t *line, int *word_idxs, int *match_len) {
         if(memcmp(line->s + line->cursor - *match_len, word, *match_len) == 0)
             word_idxs[r ++] = i;
     }
-//    printf("\r\n%i\r\n", r);
     return r;
 }
 
 char counter_text[128];
 char hint_text[128];
 
-int callback(termline_t *line, const content_t *t, int *lowest_change, bool text_changed, bool cursor_changed) {
-    static bool selection = false;
+// this callback sets hint, preview and colors
+// returns 0 when nothing changed, 1 when just preview or text or colors changed, 2 when hint changed
+int callback(termline_t *line, int *lowest_change, bool text_changed, bool cursor_changed) {
+    static bool selection = false; // tracks whether we had selection (mark) on previous run
     bool selection_ = line->mark >= 0;
-    int r = text_changed || cursor_changed && (selection_ || selection) || selection != selection_;
-    if(text_changed || cursor_changed) { if(line->hint.len) r = 2; line->hint.len = 0; }
+    bool any_changed = text_changed || // change in "bytes inputed"
+                       cursor_changed && (selection_ || selection) || // change in "bytes selected"
+                       selection != selection_; // change in presence of "bytes selected"
+
+    // === hint ===
+    bool hint_changed = (text_changed || cursor_changed) && line->hint.len;
+    if(hint_changed) line->hint.len = 0;
     int word_idxs[sizeof hinted_words / sizeof(char*)];
     int match_len;
     int n = get_completions(line, word_idxs, &match_len);
     if(n == 1) {
+        if(line->hint.len == 0) hint_changed = true;
         char *word = hinted_words[word_idxs[0]];
         int len = strlen(word);
         line->hint.len = sprintf(hint_text, "\33[2m%.*s\33[22m", len - match_len, word + match_len);
         line->hint.s = hint_text;
     }
-    if(r) {
-        if(line->len == 0) {
-            line->preview.len = 0;
-        } else {
-            if(selection_) {
-                int len = line->mark > line->cursor ? line->mark - line->cursor : line->cursor - line->mark;
-                line->preview.len = sprintf(counter_text, "\nbytes inputed: %i; bytes selected: %i", line->len, len);
-            } else line->preview.len = sprintf(counter_text, "\nbytes inputed: %i", line->len);
-            line->preview.s = counter_text;
+
+    if(!any_changed) goto ret;
+    // === preview ===
+    if(line->len == 0) {
+        line->preview.len = 0;
+    } else {
+        if(selection_) {
+            int len = line->mark > line->cursor ? line->mark - line->cursor : line->cursor - line->mark;
+            line->preview.len = sprintf(counter_text, "\n\33[2mbytes inputed: %i; bytes selected: %i", line->len, len);
+        } else line->preview.len = sprintf(counter_text, "\n\33[2mbytes inputed: %i", line->len);
+        line->preview.s = counter_text;
+    }
+
+    // === highlights ==
+    char *highlighted_words[] = { "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white" };
+    char *highlights[] = { "\33[40m", "\33[41m", "\33[42m", "\33[43m", "\33[44m", "\33[45m", "\33[46m", "\33[47m" };
+    int max_len = 7; // magenta
+    int rehighlight_from = *lowest_change - max_len + 1; // rebuilding highlights after this byte
+    if(rehighlight_from < 0) rehighlight_from = 0;
+    for(int i = 0; i < line->highlights.len; i ++) {
+        tu_color_t *h = line->highlights.p + i;
+        // removing all highlight after a color introduction (nonzero prio) after rebuild point
+        if(h->at >= rehighlight_from && h->prio) {
+            line->highlights.len = i;
+            if(i < *lowest_change) *lowest_change = i;
+            break;
         }
     }
+    int n_words = sizeof highlighted_words / sizeof(char*);
+    for(int i = rehighlight_from; i <= line->len; i ++) {
+        // outer loop through positions to keep ordering for easy trimming
+        for(int j = 0; j < n_words; j ++) {
+            char *word = highlighted_words[j];
+            int len = strlen(word);
+            if(i + len > line->len) continue;
+            if(memcmp(line->s + i, word, len) == 0) {
+                if(i < *lowest_change) *lowest_change = i;
+                tu_color_arr_append(&line->highlights, &(tu_color_t){
+                        .s = highlights[j],
+                        .len = strlen(highlights[j]),
+                        .at = i,
+                        .prio = 2500 // > 2000 to introduce color after hint which is at 2000 (see hint_prio in termline_t)
+                                     // though practically hint won't even appear at the same byte as color introduction
+                }, 1);
+                tu_color_arr_append(&line->highlights, &tu_color("\33[0m", i + len, 0), 1); // resetting color at 0 priority (asap)
+            }
+        }
+    }
+    ret:
     selection = selection_;
-    return r;
+    return hint_changed ? 2 : any_changed;
 }
 
-void tab_callback(termline_t *line, const input_t *inp) {
+// tab completion options
+void tab_callback(termline_t *line, const tu_input_t *inp) {
     int word_idxs[sizeof hinted_words / sizeof(char*)];
     int match_len;
     int n = get_completions(line, word_idxs, &match_len);
@@ -66,12 +175,44 @@ void tab_callback(termline_t *line, const input_t *inp) {
     }
 }
 
+bool enter_callback(termline_t *line, const tu_input_t *enter) {
+    if(enter->key & MOD_ALT) return true;
+    if(line->cursor == line->len && line->len > 0 && line->s[line->len - 1] == '\\') return false;
+    bool multiline = false;
+    for(int i = 0; i < line->len; i ++) multiline |= line->s[i] == '\n';
+    return !multiline;
+}
+
 int main(void) {
+//    debug = fopen("debug_pipe", "wb");
+//    fprintf(debug, "=== start ===\n"); fflush(debug);
+    setlocale(LC_ALL, ""); // necessery for the function wcwidth to operate properly
     termline_t line = tl_create(stdin, stdout);
     line.callback = callback;
     line.tab_callback = tab_callback;
+    line.enter_callback = enter_callback;
     line.prompt = tu_str("> ");
     line.nl_prompt = tu_str(". ");
-    tl_interact(&line);
+    printf("Termline by BusyBeaver\nTry entering Lorem ipsum or colors (red, green, ...)\nType `help` to see keybinds\nType `exit` or use Ctrl+D to exit\n");
+    for(;;) {
+        tl_interact(&line);
+        if(line.exit_reason == TL_EXIT_ERROR) {
+            fprintf(stderr, "%s\n", term_error_names[line.error]);
+            break;
+        } else if(line.exit_reason == TL_EXIT_INTERRUPT) {
+            continue;
+        } else if(line.exit_reason == TL_EXIT_EOF) {
+            printf("exit\n");
+            break;
+        } else if(line.exit_reason == TL_EXIT_ENTER && line.len > 0) {
+            printf("bytes inputed: %i\n", line.len);
+            tl_hist_add(&line, line.s, line.len);
+        }
+        if(line.len == 4 && memcmp(line.s, "help", 4) == 0) printf("%s", help_message);
+        if(line.len == 4 && memcmp(line.s, "exit", 4) == 0) break;
+    }
+    tl_free(&line);
+//    printf("malloc count: %i\n", mm);
+    return 0;
 }
 
