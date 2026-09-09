@@ -334,8 +334,8 @@ typedef struct {
     char *s; // the exact bytes received from stdin
     int len; // number of those
     int type; // way of interpreting those; TU_SEQ_*
-    uint32_t key; // the key; explanation next to KEY_* definitions
-    uint32_t c; // raw utf8 cp for TU_SEQ_UTF8; ignoring esc prefix for esc-prefixed keys (interpreted as MOD_ALT)
+    uint32_t key; // the key; explanation next to TU_KEY_* definitions
+    uint32_t c; // raw utf8 cp for TU_SEQ_UTF8; ignoring esc prefix for esc-prefixed keys (interpreted as TU_MOD_ALT)
 } tu_input_t;
 
 // input handlers; called sequentially; each consumes/handles some number of keystrokes/inputs; when no handler consumes an input, it is discarded
@@ -480,60 +480,60 @@ void tl_lhrec(termline_t *line, int type, bool advanse);
 
 // === key representation format ===
 // key is a uint32_t, one of:
-// - KEY_UNKNOWN: an unknown SCI, SS2 or SS3 -inited sequence
-// - KEY_INVALID_CP: a byte which is not a part of a valid SCI, SS2 or SS3 -inited sequence nor a utf8 cp
+// - TU_KEY_UNKNOWN: an unknown SCI, SS2 or SS3 -inited sequence
+// - TU_KEY_INVALID_CP: a byte which is not a part of a valid SCI, SS2 or SS3 -inited sequence nor a utf8 cp
 // - 0x2*****: a special key, one of the definitions below
-// - a number with NON_CHAR bits unset: a unicode CP (codepoint, equivalently character, surrogates not allowed), not an ASCII control ([0-0x1F]; 0x7F);
-//       ASCII controls are rerouted into 0x2001** or KEY_BACKSPACE | MOD_CTRL (for DEL 0x7F) or
-//       MOD_CTRL | [@-_] via the rule `k = Ctrl + (chr(k) + 64)` where k is the ASCII on stdin
+// - a number with TU_NON_CHAR bits unset: a unicode CP (codepoint, equivalently character, surrogates not allowed), not an ASCII control ([0-0x1F]; 0x7F);
+//       ASCII controls are rerouted into 0x2001** or TU_KEY_BACKSPACE | TU_MOD_CTRL (for DEL 0x7F) or
+//       TU_MOD_CTRL | [@-_] via the rule `k = Ctrl + (chr(k) + 64)` where k is the ASCII on stdin
 //       chr(64 + [0-0x1F]) = @ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_
 //       some of Ctrl+ASCIIs are equivalent to 0x2001** keys, then latter are used;
 //       some have duplicates (e.g. Ctrl+7=Ctrl+_=Ctrl+/=0x7F), then one following the +64 rule is prefered
-// 2 categories above can also be ORed with one or multiple MOD_* with the meaning implied; ANDing with NON_MOD gets rid of that
-#define KEY_UNKNOWN    (uint32_t)-2
-#define KEY_INVALID_CP (uint32_t)-1
-#define KEY_HOME           0x200001
-#define KEY_INSERT         0x200002
-#define KEY_DELETE         0x200003
-#define KEY_END            0x200004
-#define KEY_PAGEUP         0x200005
-#define KEY_PAGEDOWN       0x200006
-#define KEY_F1             0x20000B
-#define KEY_F2             0x20000C
-#define KEY_F3             0x20000D
-#define KEY_F4             0x20000E
-#define KEY_F5             0x20000F
-#define KEY_F6             0x200011
-#define KEY_F7             0x200012
-#define KEY_F8             0x200013
-#define KEY_F9             0x200014
-#define KEY_F10            0x200015
-#define KEY_F11            0x200017
-#define KEY_F12            0x200018
-#define KEY_F13            0x200019
-#define KEY_F14            0x20001A
-#define KEY_F15            0x20001C
-#define KEY_F16            0x20001D
-#define KEY_F17            0x20001F
-#define KEY_F18            0x200020
-#define KEY_F19            0x200021
-#define KEY_F20            0x200022
-#define KEY_ENTER          0x200100
-#define KEY_BACKSPACE      0x200101
-#define KEY_ESCAPE         0x200102
-#define KEY_TAB            0x200103
-#define KEY_UP             0x200201
-#define KEY_DOWN           0x200202
-#define KEY_RIGHT          0x200203
-#define KEY_LEFT           0x200204
+// 2 categories above can also be ORed with one or multiple TU_MOD_* with the meaning implied; ANDing with TU_NON_MOD gets rid of that
+#define TU_KEY_UNKNOWN    (uint32_t)-2
+#define TU_KEY_INVALID_CP (uint32_t)-1
+#define TU_KEY_HOME           0x200001
+#define TU_KEY_INSERT         0x200002
+#define TU_KEY_DELETE         0x200003
+#define TU_KEY_END            0x200004
+#define TU_KEY_PAGEUP         0x200005
+#define TU_KEY_PAGEDOWN       0x200006
+#define TU_KEY_F1             0x20000B
+#define TU_KEY_F2             0x20000C
+#define TU_KEY_F3             0x20000D
+#define TU_KEY_F4             0x20000E
+#define TU_KEY_F5             0x20000F
+#define TU_KEY_F6             0x200011
+#define TU_KEY_F7             0x200012
+#define TU_KEY_F8             0x200013
+#define TU_KEY_F9             0x200014
+#define TU_KEY_F10            0x200015
+#define TU_KEY_F11            0x200017
+#define TU_KEY_F12            0x200018
+#define TU_KEY_F13            0x200019
+#define TU_KEY_F14            0x20001A
+#define TU_KEY_F15            0x20001C
+#define TU_KEY_F16            0x20001D
+#define TU_KEY_F17            0x20001F
+#define TU_KEY_F18            0x200020
+#define TU_KEY_F19            0x200021
+#define TU_KEY_F20            0x200022
+#define TU_KEY_ENTER          0x200100
+#define TU_KEY_BACKSPACE      0x200101
+#define TU_KEY_ESCAPE         0x200102
+#define TU_KEY_TAB            0x200103
+#define TU_KEY_UP             0x200201
+#define TU_KEY_DOWN           0x200202
+#define TU_KEY_RIGHT          0x200203
+#define TU_KEY_LEFT           0x200204
 
-#define NON_CHAR           0x3E00000
-#define NON_MOD            0x03FFFFF
+#define TU_NON_CHAR           0x3E00000
+#define TU_NON_MOD            0x03FFFFF
 
-#define MOD_CTRL           0x0400000
-#define MOD_ALT            0x0800000
-#define MOD_SHIFT          0x1000000
-#define MOD_NUMPAD         0x2000000
+#define TU_MOD_CTRL           0x0400000
+#define TU_MOD_ALT            0x0800000
+#define TU_MOD_SHIFT          0x1000000
+#define TU_MOD_NUMPAD         0x2000000
 
 // parses an input item from s of size len
 // returns pointer to right after the parsed item, writing the result into `*in`
@@ -610,6 +610,7 @@ void tl_hist_clear(termline_t *line);
 #include <stdlib.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <inttypes.h>
 
 #if TU_SYSTEM == TU_POSIX
 #include <sys/select.h> // for pselect for waiting for SIGWINCH while watching a file
@@ -619,15 +620,14 @@ void tl_hist_clear(termline_t *line);
 #include <time.h>
 #include <stdio.h>
 #include <errno.h>      // for testing and restoring errno after pselect
-#include <inttypes.h>
 #endif
 
 // Pefixes: term_*, TERM_ - terminal-related utilities
 //          tu_*          - general utilities
 //          content_*     - functions on content_t
 //          tl_*          - functions on termline_t
-//          KEY_*         - non-printable key representations
-//          MOD_*         - key modifier bits (for CTRL/ALT/SHIFT/numpad)
+//          TU_KEY_*         - non-printable key representations
+//          TU_MOD_*         - key modifier bits (for CTRL/ALT/SHIFT/numpad)
 //          LHREC_*       - inline history (for undo/redo) record types
 // _-postfixed functions are those with unbeautiful encapsulation boundaries
 const char *const term_error_names[] = {
@@ -690,7 +690,7 @@ int term_set_raw(FILE *in, FILE *out, term_mode_t *mode) {
     if(!GetConsoleMode(outhd, &out_mode)) return -1;
     if(mode) { mode->in_mode = in_mode; mode->out_mode = out_mode; }
     in_mode &= ~(ENABLE_ECHO_INPUT           | ENABLE_INSERT_MODE        | ENABLE_MOUSE_INPUT                 |
-                 ENABLE_PROCESSED_INPUT      | ENABLE_QUICK_EDIT_MODE);
+                 ENABLE_PROCESSED_INPUT      | ENABLE_QUICK_EDIT_MODE    | ENABLE_LINE_INPUT);
     in_mode |=   ENABLE_EXTENDED_FLAGS       | ENABLE_WINDOW_INPUT       | ENABLE_VIRTUAL_TERMINAL_INPUT;
     out_mode |=  ENABLE_PROCESSED_OUTPUT     | ENABLE_WRAP_AT_EOL_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING |
                  DISABLE_NEWLINE_AUTO_RETURN;
@@ -702,7 +702,6 @@ int term_set_raw(FILE *in, FILE *out, term_mode_t *mode) {
 // restore termonal mode from term_mode_t
 // return -1 on error, otherwsise 0
 int term_restore_mode(FILE *in, FILE *out, term_mode_t *mode) {
-    if(!tu_default_ts_set) return -1;
     HANDLE inhd = tu_file2handle(in);
     if(inhd == INVALID_HANDLE_VALUE) return -1;
     HANDLE outhd = tu_file2handle(out);
@@ -978,7 +977,9 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, long timeout, int *w, int
                 if(h) *h = cd.Y;
             } else if(irs[i].EventType == KEY_EVENT) {
                 KEY_EVENT_RECORD ke = irs[i].Event.KeyEvent;
-                if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) continue;
+//                printf("\r\n%i %i %i\r\n\n", ke.wVirtualKeyCode, ke.wVirtualScanCode, ke.uChar.UnicodeChar);
+//                if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) continue;
+                if(!ke.bKeyDown) continue;
                 for(int j = 0; j < ke.wRepeatCount; j ++)
                     wstr_push(&s, ke.uChar.UnicodeChar);
             }
@@ -1917,7 +1918,8 @@ void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignred_part)
 }
 
 void tl_lhrec(termline_t *line, int type, bool advanse) {
-    if(line->lhrec_type == LHREC_HIST && type == LHREC_MOVE) goto ret;
+    //printf("\r\n%i\r\n", type);
+    if(line->lhrec_type == LHREC_INIT && type == LHREC_MOVE && line->lh.len > line->lh_idx + 1) return;
     if(line->lhrec_type != type || type == LHREC_INDEP) {
         for(int i = line->lh_idx; i < line->lh.len; i ++)
             free(line->lh.p[i].s);
@@ -1927,7 +1929,6 @@ void tl_lhrec(termline_t *line, int type, bool advanse) {
         lhrec_arr_append(&line->lh, &rec, 1);
         if(advanse) line->lh_idx ++;
     }
-    ret:
     line->lhrec_type = type;
 }
 
@@ -1995,9 +1996,9 @@ char *tu_step_input(char *s, int len, tu_input_t *in) {
     if(!finished) return NULL;
     if(in->type == TU_SEQ_CSI || in->type == TU_SEQ_SS3) {
         if(in->len == 2 && in->s[0] == '[' && 'A' <= in->s[1] && in->s[1] <= 'E')
-            { in->key = KEY_F1 + in->s[1] - 'A'; goto ret; } // linux tty variation
+            { in->key = TU_KEY_F1 + in->s[1] - 'A'; goto ret; } // linux tty variation
         if(in->len > 5)
-            { in->key = KEY_UNKNOWN; goto ret; }
+            { in->key = TU_KEY_UNKNOWN; goto ret; }
         int k, n, m, modifiers;
         if(in->len == 1) { k = 1; modifiers = 0; goto parse; }
         char buf[5] = {0};
@@ -2006,33 +2007,33 @@ char *tu_step_input(char *s, int len, tu_input_t *in) {
         if(r == 1 && n == in->len - 1) { modifiers = 0; goto parse; }
         r = sscanf(buf, "%i;%i%n", &k, &m, &n);
         if(r == 2 && n == in->len - 1) {
-            if(m == 5) modifiers = MOD_CTRL;
-            else if(m == 2) modifiers = MOD_SHIFT;
-            else if(m == 6) modifiers = MOD_CTRL | MOD_SHIFT;
-            else if(m == 3) modifiers = MOD_ALT;
-            else { in->key = KEY_UNKNOWN; goto ret; }
-        } else { in->key = KEY_UNKNOWN; goto ret; }
+            if(m == 5) modifiers = TU_MOD_CTRL;
+            else if(m == 2) modifiers = TU_MOD_SHIFT;
+            else if(m == 6) modifiers = TU_MOD_CTRL | TU_MOD_SHIFT;
+            else if(m == 3) modifiers = TU_MOD_ALT;
+            else { in->key = TU_KEY_UNKNOWN; goto ret; }
+        } else { in->key = TU_KEY_UNKNOWN; goto ret; }
         parse:
         char c = in->s[in->len - 1];
         if(c == '~') {
             if(1 <= k && k <= 8 || 11 <= k && k <= 34 && k != 16 && k != 22 && k != 27 && k != 30)
-                in->key = (k == 7 ? KEY_HOME : k == 8 ? KEY_END : KEY_HOME + k - 1) | modifiers;
-            else in->key = KEY_UNKNOWN;
+                in->key = (k == 7 ? TU_KEY_HOME : k == 8 ? TU_KEY_END : TU_KEY_HOME + k - 1) | modifiers;
+            else in->key = TU_KEY_UNKNOWN;
         }
-        else if(('P' <= c && c <= 'S') && k == 1) in->key = (KEY_F1 + (c - 'P')) | modifiers;
-        else if(c == 'H' && k == 1) in->key = KEY_HOME  | modifiers;
-        else if(c == 'F' && k == 1) in->key = KEY_END   | modifiers;
-        else if(c == 'I' && k == 1) in->key = KEY_TAB   | modifiers;
-        else if(c == 'Z' && k == 1) in->key = KEY_TAB | MOD_SHIFT | modifiers;
-        else if(c == 'M' && k == 1) in->key = KEY_ENTER | modifiers | (in->type == TU_SEQ_SS3 ? MOD_NUMPAD : 0);
-        else if('A' <= c && c <= 'D' && k == 1) in->key = (KEY_UP + c - 'A') | modifiers | (in->type == TU_SEQ_SS3 ? MOD_NUMPAD : 0);
+        else if(('P' <= c && c <= 'S') && k == 1) in->key = (TU_KEY_F1 + (c - 'P')) | modifiers;
+        else if(c == 'H' && k == 1) in->key = TU_KEY_HOME  | modifiers;
+        else if(c == 'F' && k == 1) in->key = TU_KEY_END   | modifiers;
+        else if(c == 'I' && k == 1) in->key = TU_KEY_TAB   | modifiers;
+        else if(c == 'Z' && k == 1) in->key = TU_KEY_TAB | TU_MOD_SHIFT | modifiers;
+        else if(c == 'M' && k == 1) in->key = TU_KEY_ENTER | modifiers | (in->type == TU_SEQ_SS3 ? TU_MOD_NUMPAD : 0);
+        else if('A' <= c && c <= 'D' && k == 1) in->key = (TU_KEY_UP + c - 'A') | modifiers | (in->type == TU_SEQ_SS3 ? TU_MOD_NUMPAD : 0);
         else if('j' <= c && c <= 'y' && k == 1 && in->type == TU_SEQ_SS3) in->key = (uint32_t)(c - 'j' + '*') | modifiers;
-        else in->key = KEY_UNKNOWN;
+        else in->key = TU_KEY_UNKNOWN;
         ret:
         in->len += in->s - s; in->s = s; // returning introducer
         return in->s + in->len;
     } else if(in->type != TU_SEQ_INVALID) {
-        in->key = KEY_UNKNOWN;
+        in->key = TU_KEY_UNKNOWN;
         in->len += in->s - s; in->s = s; // returning introducer
         return in->s + in->len;
     }
@@ -2047,25 +2048,25 @@ char *tu_step_input(char *s, int len, tu_input_t *in) {
     in->len = s_ - s + esc;
     if(s_ == s) {
         if(esc) goto esc;
-        in->key = KEY_INVALID_CP;
+        in->key = TU_KEY_INVALID_CP;
         in->len = 1;
         return s + 1;
     }
 //    if((in->c < 0x20 || in->c == 127) && esc) goto esc;
     if((in->c == '\33') && esc) goto esc;
-         if(in->c == '\r') in->key = KEY_ENTER;
-    else if(in->c == '\10') in->key = KEY_BACKSPACE | MOD_CTRL;
-    else if(in->c == '\11') in->key = KEY_TAB;
-    else if(in->c == '\33') in->key = KEY_ESCAPE;
-    else if(in->c < 0x20) in->key = (in->c + '@') | MOD_CTRL;
-    else if(in->c == '\177') in->key = KEY_BACKSPACE;
+         if(in->c == '\r') in->key = TU_KEY_ENTER;
+    else if(in->c == '\10') in->key = TU_KEY_BACKSPACE | TU_MOD_CTRL;
+    else if(in->c == '\11') in->key = TU_KEY_TAB;
+    else if(in->c == '\33') in->key = TU_KEY_ESCAPE;
+    else if(in->c < 0x20) in->key = (in->c + '@') | TU_MOD_CTRL;
+    else if(in->c == '\177') in->key = TU_KEY_BACKSPACE;
     else in->key = in->c;
-    if(esc) in->key |= MOD_ALT;
+    if(esc) in->key |= TU_MOD_ALT;
     return s_;
     esc:
     in->s = s - 1;
     in->len = 1;
-    in->key = KEY_ESCAPE;
+    in->key = TU_KEY_ESCAPE;
     return s;
 }
 
@@ -2229,13 +2230,13 @@ int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     str_t temp = { NULL };
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-//        if(key & NON_CHAR && k != KEY_ENTER && k != KEY_INVALID_CP) break;
-        if(line->raw_insert || (key & NON_CHAR) == 0 && line->hist_search == 0) {
+        uint32_t k = key & TU_NON_MOD;
+//        if(key & TU_NON_CHAR && k != TU_KEY_ENTER && k != TU_KEY_INVALID_CP) break;
+        if(line->raw_insert || (key & TU_NON_CHAR) == 0 && line->hist_search == 0) {
             tl_lhrec(line, tu_is_wordy(inputs->c, false) ? LHREC_INSERT_WORD : LHREC_INSERT_NONWORD, true);
             str_append(&temp, inputs->s, inputs->len);
             line->raw_insert = false;
-        } else if(k == KEY_ENTER) {
+        } else if(k == TU_KEY_ENTER) {
             bool do_exit = true;
             if(line->enter_callback) {
                 if(temp.len) {
@@ -2247,10 +2248,10 @@ int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int
             }
             if(do_exit) { line->exit_reason = TL_EXIT_ENTER; break; }
             else { tl_lhrec(line, LHREC_INSERT_NEWLINE, true); str_append(&temp, "\n", 1); }
-        } else if(k == KEY_INVALID_CP) {
+        } else if(k == TU_KEY_INVALID_CP) {
             tl_lhrec(line, LHREC_INSERT_WORD, true);
             str_append(&temp, "\xEF\xBF\xBD", 3);
-        } else if(k == 'V' && (key & MOD_CTRL)) {
+        } else if(k == 'V' && (key & TU_MOD_CTRL)) {
             line->raw_insert = true;
         } else break;
     }
@@ -2341,10 +2342,10 @@ int tl_handle_arrows(termline_t *line, int *lowest_change, tu_input_t *inputs, i
     int _cb = line->cursor;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
+        uint32_t k = key & TU_NON_MOD;
         int _cursor = line->cursor;
-        if((k == KEY_UP || k == KEY_DOWN) && _t.s == NULL) tl_compose(line, 0, (str_t*)&_t, NULL, true, false);
-        if((key & NON_CHAR) == 0 && line->char_search) {
+        if((k == TU_KEY_UP || k == TU_KEY_DOWN) && _t.s == NULL) tl_compose(line, 0, (str_t*)&_t, NULL, true, false);
+        if((key & TU_NON_CHAR) == 0 && line->char_search) {
             if(line->char_search > 0) {
                 if(line->cursor >= line->len) goto no_found;
                 int b, e;
@@ -2369,15 +2370,15 @@ int tl_handle_arrows(termline_t *line, int *lowest_change, tu_input_t *inputs, i
             no_found:
             line->char_search = 0;
         }
-        else if(k == KEY_UP    && (key & MOD_CTRL) == 0) tl_move_v(line, &_t, -1);
-        else if(k == KEY_DOWN  && (key & MOD_CTRL) == 0) tl_move_v(line, &_t, 1);
-        else if(k == KEY_RIGHT && (key & MOD_CTRL) || (k == 'f' || k == 'F') && (key & MOD_ALT)) line->cursor = tu_search_forward_word(line->s, line->len, line->cursor, false);
-        else if(k == KEY_LEFT  && (key & MOD_CTRL) || (k == 'b' || k == 'B') && (key & MOD_ALT)) line->cursor = tu_search_back_word(line->s, line->cursor, false);
-        else if(k == KEY_LEFT  || k == 'B' && (key & MOD_CTRL)) tl_move_h(line, -1);
-        else if(k == KEY_RIGHT || k == 'F' && (key & MOD_CTRL)) tl_move_h(line, 1);
-        else if(k == KEY_HOME  || k == 'A' && (key & MOD_CTRL)) tl_move_H(line, -1);
-        else if(k == KEY_END   || k == 'E' && (key & MOD_CTRL)) tl_move_H(line, 1);
-        else if(k == ']' && (key & MOD_CTRL)) line->char_search = (key & MOD_ALT) ? -1 : +1;
+        else if(k == TU_KEY_UP    && (key & TU_MOD_CTRL) == 0) tl_move_v(line, &_t, -1);
+        else if(k == TU_KEY_DOWN  && (key & TU_MOD_CTRL) == 0) tl_move_v(line, &_t, 1);
+        else if(k == TU_KEY_RIGHT && (key & TU_MOD_CTRL) || (k == 'f' || k == 'F') && (key & TU_MOD_ALT)) line->cursor = tu_search_forward_word(line->s, line->len, line->cursor, false);
+        else if(k == TU_KEY_LEFT  && (key & TU_MOD_CTRL) || (k == 'b' || k == 'B') && (key & TU_MOD_ALT)) line->cursor = tu_search_back_word(line->s, line->cursor, false);
+        else if(k == TU_KEY_LEFT  || k == 'B' && (key & TU_MOD_CTRL)) tl_move_h(line, -1);
+        else if(k == TU_KEY_RIGHT || k == 'F' && (key & TU_MOD_CTRL)) tl_move_h(line, 1);
+        else if(k == TU_KEY_HOME  || k == 'A' && (key & TU_MOD_CTRL)) tl_move_H(line, -1);
+        else if(k == TU_KEY_END   || k == 'E' && (key & TU_MOD_CTRL)) tl_move_H(line, 1);
+        else if(k == ']' && (key & TU_MOD_CTRL)) line->char_search = (key & TU_MOD_ALT) ? -1 : +1;
         else break;
         if(_cursor != line->cursor) {
             int cursor_ = line->cursor; line->cursor = _cursor;
@@ -2396,29 +2397,29 @@ int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, in
     int at = line->cursor, l = 0;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
+        uint32_t k = key & TU_NON_MOD;
 //        printf("\r\n[%x]\r\n", key);
-        if((k == 'w' || k == 'W') && (key & MOD_ALT)) {
+        if((k == 'w' || k == 'W') && (key & TU_MOD_ALT)) {
             if(line->mark >= 0 & line->mark != line->cursor) {
                 tl_lhrec(line, LHREC_INDEP, true);
                 if(line->mark < at) { tl_kill(line, line->mark, at - line->mark, true); at = line->mark; }
                 if(at + l < line->mark) { tl_kill(line, at + l, line->mark - at - l, true); }
                 line->mark = -1;
             }
-        } else if(k == 'W' && (key & MOD_CTRL) || k == KEY_BACKSPACE && (key & MOD_ALT)) {
+        } else if(k == 'W' && (key & TU_MOD_CTRL) || k == TU_KEY_BACKSPACE && (key & TU_MOD_ALT)) {
             if(at > 0) {
-                int i = tu_search_back_word(line->s, at, k == 'W' && (key & MOD_CTRL));
+                int i = tu_search_back_word(line->s, at, k == 'W' && (key & TU_MOD_CTRL));
                 tl_lhrec(line, LHREC_INDEP, true);
                 tl_kill(line, i, at - i, true);
                 at = i;
             }
-        } else if((k == 'd' || k == 'D') && (key & MOD_ALT)) {
+        } else if((k == 'd' || k == 'D') && (key & TU_MOD_ALT)) {
             if(at + l < line->len) {
                 int i = tu_search_forward_word(line->s, line->len, at + l, false);
                 tl_lhrec(line, LHREC_INDEP, true);
                 tl_kill(line, at + l, i - at - l, true);
             }
-        } else if(k == 'U' && (key & MOD_CTRL)) {
+        } else if(k == 'U' && (key & TU_MOD_CTRL)) {
             if(at > 0) {
                 int i;
                 for(i = at; i --> 0;) if(line->s[i] == '\n') break;
@@ -2427,14 +2428,14 @@ int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, in
                 tl_kill(line, i, at - i, true);
                 at = i;
             }
-        } else if(k == 'K' && (key & MOD_CTRL)) {
+        } else if(k == 'K' && (key & TU_MOD_CTRL)) {
             if(at + l < line->len && line->s[at + l] != '\n') {
                 int i;
                 for(i = at; i < line->len; i ++) if(line->s[i] == '\n') break;
                 tl_lhrec(line, LHREC_INDEP, true);
                 tl_kill(line, at + l, i - at - l, true);
             }
-        } else if(k == KEY_DELETE || k == 'D' && (key & MOD_CTRL)) {
+        } else if(k == TU_KEY_DELETE || k == 'D' && (key & TU_MOD_CTRL)) {
             if(at + l < line->len) {
                 tl_lhrec(line, tu_is_wordy(line->s[at + l], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
                 int e;
@@ -2443,7 +2444,7 @@ int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, in
                 while(e < line->len && w == 0) tu_item_boundary(line->s, line->len, e, &b, &e, &w);
                 l = (w == 0 ? e : b) - at;
             }
-        } else if(k == KEY_BACKSPACE || k == 'H' && (key & MOD_CTRL)) {
+        } else if(k == TU_KEY_BACKSPACE || k == 'H' && (key & TU_MOD_CTRL)) {
             if(at > 0) tl_lhrec(line, tu_is_wordy(line->s[at - 1], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
             int b = at, e = at, w = 0;
             while(b > 0 && w == 0) tu_item_boundary(line->s, line->len, b - 1, &b, &e, &w);
@@ -2484,19 +2485,20 @@ int tl_handle_yanks(termline_t *line, int *lowest_change, tu_input_t *inputs, in
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if(k == '@' && (key & MOD_CTRL)) {
-            tl_lhrec(line, LHREC_LH, true);
+        uint32_t k = key & TU_NON_MOD;
+        if(k == '@' && (key & TU_MOD_CTRL)) {
+            tl_lhrec(line, LHREC_MOVE, true);
             if(line->mark >= 0 && line->mark < *lowest_change) *lowest_change = line->mark;
             line->mark = line->cursor >= 0 ? line->cursor : 0;
             line->mark_weak = false;
-        } else if(k == KEY_ESCAPE || k == 'G' && (key & MOD_CTRL)) {
-            tl_lhrec(line, LHREC_LH, true);
+        } else if(k == TU_KEY_ESCAPE || k == 'G' && (key & TU_MOD_CTRL)) { // not specific to this handler but whatever
+//            if(line->mark >= 0 || line->tab_compls.len > 0 || line->hist_search)
+                tl_lhrec(line, LHREC_INIT, true);
             line->mark = -1;
-        } else if((k == 'y' || k == 'Y') && (key & MOD_CTRL || key & MOD_ALT)) {
+        } else if((k == 'y' || k == 'Y') && (key & TU_MOD_CTRL || key & TU_MOD_ALT)) {
             if(line->killring.len == 0) goto no_yank;
-            if((key & MOD_ALT) == 0) line->kr_idx = -1;
-            if(line->mark_weak && (key & MOD_ALT) == 0) line->mark = -1;
+            if((key & TU_MOD_ALT) == 0) line->kr_idx = -1;
+            if(line->mark_weak && (key & TU_MOD_ALT) == 0) line->mark = -1;
             tl_lhrec(line, LHREC_YANK, true);
             if(line->kr_idx < 0) line->kr_idx = line->killring.len - 1;
             str_t y = line->killring.p[line->kr_idx];
@@ -2504,9 +2506,9 @@ int tl_handle_yanks(termline_t *line, int *lowest_change, tu_input_t *inputs, in
             line->kr_idx --;
             if(line->kr_idx < 0) line->kr_idx = line->killring.len - 1;
             no_yank:;
-        } else if((k == 'x' || k == 'X') && (key & MOD_CTRL || key & MOD_ALT)) {
-            tl_lhrec(line, LHREC_LH, true);
-            if(line->mark < 0) line->mark = (key & MOD_ALT) ? line->len : 0;
+        } else if((k == 'x' || k == 'X') && (key & TU_MOD_CTRL || key & TU_MOD_ALT)) {
+            tl_lhrec(line, LHREC_MOVE, true);
+            if(line->mark < 0) line->mark = (key & TU_MOD_ALT) ? line->len : 0;
             if(line->mark >= 0) {
                 line->cursor ^= line->mark;
                 line->mark ^= line->cursor;
@@ -2521,11 +2523,11 @@ int tl_handle_yanks(termline_t *line, int *lowest_change, tu_input_t *inputs, in
 void tl_unhandle_yanks(termline_t *line, tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
-        uint32_t k = key & NON_MOD;
-             if(k == 'L' && (key & MOD_CTRL)); // ingnore rerender
-        else if(k == '_' && (key & MOD_CTRL)); // ignore undo
-        else if(k == '^' && (key & MOD_CTRL)); // ignore redo
-        else if(k == KEY_TAB); // ignore tabs
+        uint32_t k = key & TU_NON_MOD;
+             if(k == 'L' && (key & TU_MOD_CTRL)); // ingnore rerender
+        else if(k == '_' && (key & TU_MOD_CTRL)); // ignore undo
+        else if(k == '^' && (key & TU_MOD_CTRL)); // ignore redo
+        else if(k == TU_KEY_TAB); // ignore tabs
         else if(line->mark_weak) { line->kr_idx = -1; line->mark = -1; }
     }
 }
@@ -2534,8 +2536,8 @@ int tl_handle_swaps(termline_t *line, int *lowest_change, tu_input_t *inputs, in
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if(k == 'T' && (key & MOD_CTRL)) {
+        uint32_t k = key & TU_NON_MOD;
+        if(k == 'T' && (key & TU_MOD_CTRL)) {
             if(line->len >= 2) {
                 tl_lhrec(line, LHREC_INDEP, true);
                 int cb = line->cursor;
@@ -2547,7 +2549,7 @@ int tl_handle_swaps(termline_t *line, int *lowest_change, tu_input_t *inputs, in
                 line->cursor = cb + 1;
                 if(cb <= *lowest_change) *lowest_change = cb - 1;
             }
-        } else if((k == 't' || k == 'T') && (key & MOD_ALT)) {
+        } else if((k == 't' || k == 'T') && (key & TU_MOD_ALT)) {
             int i = tu_search_back_word(line->s, line->cursor, k == 'T');
             i = tu_search_back_word(line->s, i, k == 'T');
             int e1 = tu_search_forward_word(line->s, line->len, i, k == 'T');
@@ -2575,15 +2577,15 @@ int tl_handle_controls(termline_t *line, int *lowest_change, tu_input_t *inputs,
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if(k == 'L' && (key & MOD_CTRL)) {
+        uint32_t k = key & TU_NON_MOD;
+        if(k == 'L' && (key & TU_MOD_CTRL)) {
             int r = term_check_resize(t->in, t->out, &t->width, &t->height);
             if(r < 0) t->error = TERM_ERR_GETSIZE;
             t->resize_pending = true;
-        } else if(k == 'C' && (key & MOD_CTRL)) {
+        } else if(k == 'C' && (key & TU_MOD_CTRL)) {
             line->exit_reason = TL_EXIT_INTERRUPT;
             break;
-        } else if(k == 'D' && (key & MOD_CTRL) && line->len == 0) {
+        } else if(k == 'D' && (key & TU_MOD_CTRL) && line->len == 0) {
             line->exit_reason = TL_EXIT_EOF;
             break;
         } else break;
@@ -2595,8 +2597,8 @@ int tl_handle_case(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if((k == 'c' || k == 'C' || k == 'u' || k == 'U' || k == 'l' || k == 'L') && (key & MOD_ALT)) {
+        uint32_t k = key & TU_NON_MOD;
+        if((k == 'c' || k == 'C' || k == 'u' || k == 'U' || k == 'l' || k == 'L') && (key & TU_MOD_ALT)) {
             tl_lhrec(line, LHREC_INDEP, true);
             int b = -1, E;
             if(line->mark >= 0 && line->mark != line->cursor) {
@@ -2627,14 +2629,14 @@ int tl_handle_lh(termline_t *line, int *lowest_change, tu_input_t *inputs, int l
     int _lh_idx = line->lh_idx;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if(k == '_' && (key & MOD_CTRL)) {
+        uint32_t k = key & TU_NON_MOD;
+        if(k == '_' && (key & TU_MOD_CTRL)) {
 //            printf("\r\n[%i]", line->lh_idx);
             if(line->lh_idx > 0) {
                 tl_lhrec(line, LHREC_INIT, false);
                 line->lh_idx --;
             }
-        } else if(k == '^' && (key & MOD_CTRL)) {
+        } else if(k == '^' && (key & TU_MOD_CTRL)) {
             if(line->lh_idx < line->lh.len - 1) {
 //                printf("\r\n[%i %i %i]\r\n", line->lh_idx, line->lh.len, line->lhrec_type);
                 tl_lhrec(line, LHREC_INIT, false);
@@ -2669,27 +2671,27 @@ int tl_handle_hist(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     for(int i = 0; i < line->len; i ++) multiline |= (line->s[i] == '\n');
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if((k == 'N' || k == 'P' || k == KEY_UP || k == KEY_DOWN) && (key & MOD_CTRL) ||
-           (k == KEY_UP || k == KEY_DOWN) && !multiline) {
-            int move = k == 'N' || k == KEY_DOWN ? +1 : -1;
+        uint32_t k = key & TU_NON_MOD;
+        if((k == 'N' || k == 'P' || k == TU_KEY_UP || k == TU_KEY_DOWN) && (key & TU_MOD_CTRL) ||
+           (k == TU_KEY_UP || k == TU_KEY_DOWN) && !multiline) {
+            int move = k == 'N' || k == TU_KEY_DOWN ? +1 : -1;
             if(line->hist_idx + move < line->hist.len && line->hist_idx + move >= 0) {
                 tl_lhrec(line, LHREC_HIST, true);
                 tl_hist(line, line->hist_idx + move);
 //                printf("\r\n%i\r\n", multiline);
                 *lowest_change = 0;
             }
-        } else if((k == 'R' || k == 'S') && (key & MOD_CTRL)) {
+        } else if((k == 'R' || k == 'S') && (key & TU_MOD_CTRL)) {
             if(line->hist_search == 0) line->search.len = 0;
             if(!line->hist_search) tl_lhrec(line, LHREC_INDEP, true);
             line->hist_search = k == 'R' ? -1 : +1;
             line->hint.len = 0;
             goto do_search;
-        } else if(line->hist_search && (key & NON_CHAR) == 0) {
+        } else if(line->hist_search && (key & TU_NON_CHAR) == 0) {
             char c = (char)key;
             str_append(&line->search, &c, 1);
             goto do_search;
-        } else if(line->hist_search && line->search.len > 0 && key == KEY_BACKSPACE) {
+        } else if(line->hist_search && line->search.len > 0 && key == TU_KEY_BACKSPACE) {
             line->search.len --;
             goto do_search;
         } else break;
@@ -2717,8 +2719,8 @@ int tl_handle_hist(termline_t *line, int *lowest_change, tu_input_t *inputs, int
 void tl_unhandle_hist(termline_t *line, tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
-        uint32_t k = key & NON_MOD;
-        if(k == 'L' && (key & MOD_CTRL)); // ingnore rerender
+        uint32_t k = key & TU_NON_MOD;
+        if(k == 'L' && (key & TU_MOD_CTRL)); // ingnore rerender
         else line->hist_search = 0;
     }
 }
@@ -2727,14 +2729,14 @@ int tl_handle_tabs(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
-        uint32_t k = key & NON_MOD;
-        if(k == KEY_TAB) {
+        uint32_t k = key & TU_NON_MOD;
+        if(k == TU_KEY_TAB) {
             if(line->tab_compls.len) {
                 tl_lhrec(line, LHREC_TAB, true);
                 if(line->tab_option < 0) {
                      line->mark = -1;
-                     line->tab_option = (key & MOD_SHIFT) ? line->tab_compls.len - 1 : 0;
-                } else line->tab_option = (line->tab_option + ((key & MOD_SHIFT) ? -1 : +1) + line->tab_compls.len) % line->tab_compls.len;
+                     line->tab_option = (key & TU_MOD_SHIFT) ? line->tab_compls.len - 1 : 0;
+                } else line->tab_option = (line->tab_option + ((key & TU_MOD_SHIFT) ? -1 : +1) + line->tab_compls.len) % line->tab_compls.len;
                 tu_tab_t y = line->tab_compls.p[line->tab_option];
                 tl_paste_(line, lowest_change, y.s + y.ignored, y.len - y.ignored);
             } else if(line->tab_callback) {
@@ -2764,8 +2766,8 @@ int tl_handle_tabs(termline_t *line, int *lowest_change, tu_input_t *inputs, int
 void tl_unhandle_tabs(termline_t *line, tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
-        uint32_t k = key & NON_MOD;
-        if(k == 'L' && (key & MOD_CTRL)); // ingnore rerender
+        uint32_t k = key & TU_NON_MOD;
+        if(k == 'L' && (key & TU_MOD_CTRL)); // ingnore rerender
         else {
             for(int i = 0; i < line->tab_compls.len; i ++) free(line->tab_compls.p[i].s);
             line->tab_compls.len = 0;
