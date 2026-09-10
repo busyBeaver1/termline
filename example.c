@@ -176,7 +176,7 @@ void tab_callback(termline_t *line, const tu_input_t *inp) {
 }
 
 bool enter_callback(termline_t *line, const tu_input_t *enter) {
-    if(enter->key & MOD_ALT) return true;
+    if(enter->key & TU_MOD_ALT) return true;
     if(line->cursor == line->len && line->len > 0 && line->s[line->len - 1] == '\\') return false;
     bool multiline = false;
     for(int i = 0; i < line->len; i ++) multiline |= line->s[i] == '\n';

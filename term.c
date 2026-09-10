@@ -977,9 +977,13 @@ int term_wait_resize_or_in(FILE *in, str_t *input_buf, long timeout, int *w, int
                 if(h) *h = cd.Y;
             } else if(irs[i].EventType == KEY_EVENT) {
                 KEY_EVENT_RECORD ke = irs[i].Event.KeyEvent;
-//                printf("\r\n%i %i %i\r\n\n", ke.wVirtualKeyCode, ke.wVirtualScanCode, ke.uChar.UnicodeChar);
+//                printf("\r\nKeyCode: %i ScanCode: %i Char: %i Keydown: %i Ctrl: %i\r\n\n", ke.wVirtualKeyCode, ke.wVirtualScanCode, ke.uChar.UnicodeChar, ke.bKeyDown, ke.dwControlKeyState);
 //                if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) continue;
-                if(!ke.bKeyDown) continue;
+                if(
+                        !ke.bKeyDown ||
+                        ke.uChar.UnicodeChar == 0 && ke.wVirtualKeyCode != 0x32 // Git bash (mintty) generates extra keydown events that we filter out by checking UnicodeChar
+                                                                                // Thugh for Ctrl+Space/Ctrl+@/Ctrl+2 which are genuine null bytes we bring them back by KeyCode (0x32 is for key 2)
+                ) continue;
                 for(int j = 0; j < ke.wRepeatCount; j ++)
                     wstr_push(&s, ke.uChar.UnicodeChar);
             }
@@ -1640,6 +1644,7 @@ void content_init(content_t *t) {
 }
 
 void content_render_from(content_t *t, int start, bool extra_overwrite) {
+//    printf("\r\n\nRender from: %i\r\n\n", start);
     if(t->error || t->resize_pending) return;
     assert(0 <= start && start <= t->len);
     if(t->origin < 1) { t->origin = 1; start = 0; }
@@ -2790,16 +2795,17 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
             consumed = line->handlers.p[i].handle(line, &lowest_change, inputs, len);
 //            DEBUG("%i %i\n", i, lowest_change);
             if(consumed) { by = i; break; }
-            if(line->exit_reason) return 0;
+            if(line->exit_reason) goto out;
         }
         if(consumed == 0) consumed = 1;
         for(int i = 0; i < line->handlers.len; i ++) {
             if(line->handlers.p[i].unhandle && i != by) line->handlers.p[i].unhandle(line, inputs, consumed);
-            if(line->exit_reason) return 0;
+            if(line->exit_reason) goto out;
         }
         inputs += consumed;
         len -= consumed;
     }
+    out:
     bool text_changed = lowest_change != line->len || lowest_change != _len || first_run;
     int r = 0;
     if(line->callback && !line->hist_search && !line->tab_compls.len) {
