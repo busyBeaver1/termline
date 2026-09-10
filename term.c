@@ -1079,7 +1079,7 @@ int tu_gets_utf8(FILE *in, char *dst) {
     if(!ReadConsoleInputW(inhd, &ir1, 1, &n) || n == 0) return 0;
     if(ir1.EventType != KEY_EVENT) goto read1;
     KEY_EVENT_RECORD ke = ir1.Event.KeyEvent;
-    if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) goto read1;
+    if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0 && ke.wVirtualKeyCode != 0x32) goto read1;
     ws[0] = ke.uChar.UnicodeChar;
     int N = 1;
     if(0xD800 <= ws[0] && ws[0] < 0xDC00) { // got high surogate, waiting for the low counterpart
@@ -1088,7 +1088,7 @@ int tu_gets_utf8(FILE *in, char *dst) {
         if(!PeekConsoleInputW(inhd, &ir2, 1, &n) || n == 0) return 0;
         if(ir2.EventType != KEY_EVENT) goto read2;
         KEY_EVENT_RECORD ke = ir2.Event.KeyEvent;
-        if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0) goto read2;
+        if(!ke.bKeyDown || ke.uChar.UnicodeChar == 0 && ke.wVirtualKeyCode != 0x32) goto read2;
         ws[1] = ke.uChar.UnicodeChar;
         if(!(0xD800 <= ws[1] && ws[1] < 0xDC00)) { // if got not a high surrogate, read it, otherwsise leave as is
             if(!ReadConsoleInputW(inhd, &ir2, 1, &n) || n == 0) return 0;
