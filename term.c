@@ -33,6 +33,11 @@
 #include <windows.h>
 #endif
 
+#if __cplusplus
+extern "C" {
+#endif
+
+//int mm = 0;
 //#define malloc(n) (mm++, malloc(n))
 //#define free(n) (mm-=(n!=NULL), free(n))
 
@@ -60,7 +65,6 @@
 #define TERM_COLOR_BACK_RED       "\33[41m"
 #define TERM_COLOR_BACK_DEFAULT   "\33[49m"
 #define TERM_CURSOR_NEWLINE       "\33[B\33[G" // does not push bottom of the screen unlike \r\n
-
 
 #if TU_SYSTEM == TU_POSIX
 typedef struct termios term_mode_t;
@@ -570,13 +574,13 @@ void tl_lhrec(termline_t *line, int type, bool advanse);
 #define TU_KEY_RIGHT          0x200203
 #define TU_KEY_LEFT           0x200204
 
-#define TU_NON_CHAR           0x3E00000
-#define TU_NON_MOD            0x03FFFFF
+#define TU_NON_CHAR          0x3E00000
+#define TU_NON_MOD           0x03FFFFF
 
-#define TU_MOD_CTRL           0x0400000
-#define TU_MOD_ALT            0x0800000
-#define TU_MOD_SHIFT          0x1000000
-#define TU_MOD_NUMPAD         0x2000000
+#define TU_MOD_CTRL          0x0400000
+#define TU_MOD_ALT           0x0800000
+#define TU_MOD_SHIFT         0x1000000
+#define TU_MOD_NUMPAD        0x2000000
 
 // parses an input item from s of size len
 // returns pointer to right after the parsed item, writing the result into `*in`
@@ -645,6 +649,10 @@ void tl_lh_clear(termline_t *line);
 
 // clear all history entries
 void tl_hist_clear(termline_t *line);
+
+#if __cplusplus
+} // extrn "C"
+#endif
 
 // ====== \/ IMPLEMENTATION \/ =====
 #if TERMLINE_IMPLEMENTATION

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 char *help_message =
 "Most keybinds are bash/zsh -like, with some differences\n"
