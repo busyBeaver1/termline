@@ -1,4 +1,5 @@
-//int mm = 0;
+// This is example usage of Termline library
+// All callbacks are optional, jump straight to `int main` to see the main code
 
 #define TERMLINE_IMPLEMENTATION 1
 #include "term.c"
@@ -70,7 +71,7 @@ char *help_message =
 char *hinted_words[] = { "Lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore", "magna", "aliqua", "Ut", "enim", "ad", "minim", "veniam", "quis", "nostrud", "exercitation", "ullamco", "laboris", "nisi", "aliquip", "ex", "ea", "commodo", "consequat", "Duis", "aute", "irure", "in", "reprehenderit", "voluptate", "velit", "esse", "cillum", "eu", "fugiat", "nulla", "pariatur", "Excepteur", "sint", "occaecat", "cupidatat", "non", "proident", "sunt", "culpa", "qui", "officia", "deserunt", "mollit", "anim", "id", "est", "laborum" };
 
 // find possible completions at the cursor out of hinted_words, write indices into word_idxs,
-// write length of the already inputed part into *match_len, return the count of completions found
+// write length of the already inputted part into *match_len, return the count of completions found
 int get_completions(termline_t *line, int *word_idxs, int *match_len) {
     if(line->cursor < line->len && line->s[line->cursor] != ' ' && line->s[line->cursor] != '\n') return 0; // no completions mid-word
     for(int i = line->cursor - 2; i >= -1; i --) {
@@ -97,7 +98,7 @@ char hint_text[128];
 int callback(termline_t *line, int *lowest_change, bool text_changed, bool cursor_changed) {
     static bool selection = false; // tracks whether we had selection (mark) on previous run
     bool selection_ = line->mark >= 0;
-    bool any_changed = text_changed || // change in "bytes inputed"
+    bool any_changed = text_changed || // change in "bytes inputted"
                        cursor_changed && (selection_ || selection) || // change in "bytes selected"
                        selection != selection_; // change in presence of "bytes selected"
 
@@ -122,8 +123,8 @@ int callback(termline_t *line, int *lowest_change, bool text_changed, bool curso
     } else {
         if(selection_) {
             int len = line->mark > line->cursor ? line->mark - line->cursor : line->cursor - line->mark;
-            line->preview.len = sprintf(counter_text, "\n\33[2mbytes inputed: %i; bytes selected: %i", line->len, len);
-        } else line->preview.len = sprintf(counter_text, "\n\33[2mbytes inputed: %i", line->len);
+            line->preview.len = sprintf(counter_text, "\n\33[2mbytes inputted: %i; bytes selected: %i", line->len, len);
+        } else line->preview.len = sprintf(counter_text, "\n\33[2mbytes inputted: %i", line->len);
         line->preview.s = counter_text;
     }
 
@@ -169,6 +170,15 @@ int callback(termline_t *line, int *lowest_change, bool text_changed, bool curso
 
 // tab completion options
 void tab_callback(termline_t *line, const tu_input_t *inp) {
+    // makeing Tab insert "    " indent when at line beginning
+    bool at_line_beginning = true;
+    for(int i = line->cursor - 1; i >= 0 && line->s[i] != '\n'; i --)
+        at_line_beginning &= line->s[i] == ' ';
+    if(at_line_beginning) {
+        tl_add_tab_compl(line, "    ", 4, 0);
+        return;
+    }
+    // otherwise searching for known words
     int word_idxs[sizeof hinted_words / sizeof(char*)];
     int match_len;
     int n = get_completions(line, word_idxs, &match_len);
@@ -181,20 +191,40 @@ void tab_callback(termline_t *line, const tu_input_t *inp) {
 
 bool enter_callback(termline_t *line, const tu_input_t *enter) {
     if(enter->key & TU_MOD_ALT) return true;
+    // repeating indent
+    int line_begin = line->cursor;
+    while(line_begin > 0 && line->s[line_begin - 1] != '\n') line_begin --;
+    int space_count = 0; // indent depth
+    for(int i = line_begin; i < line->len && line->s[i] == ' '; i ++) space_count ++;
+    char *indent = malloc(space_count + 1);
+    indent[0] = '\n';
+    memset(indent + 1, ' ', space_count);
+    tl_set_newline(line, indent, space_count + 1); // setting `indent` to be inserted insted of '\n'
+    free(indent);
+
     if(line->cursor == line->len && line->len > 0 && line->s[line->len - 1] == '\\') return false;
     bool multiline = false;
     for(int i = 0; i < line->len; i ++) multiline |= line->s[i] == '\n';
     return !multiline;
 }
 
+int backspace_callback(termline_t *line, const tu_input_t *backspace) {
+    int line_begin = line->cursor;
+    while(line_begin > 0 && line->s[line_begin - 1] != '\n') line_begin --;
+    bool is_indent = true;
+    for(int i = line_begin; i < line->cursor; i ++) is_indent &= line->s[i] == ' ';
+    if(is_indent && line_begin < line->cursor)
+        return (line->cursor - line_begin) > 4 ? 4 : (line->cursor - line_begin);
+    return -1;
+}
+
 int main(void) {
-//    debug = fopen("debug_pipe", "wb");
-//    fprintf(debug, "=== start ===\n"); fflush(debug);
     setlocale(LC_ALL, ""); // necessery for the function wcwidth to operate properly
     termline_t line = tl_create(stdin, stdout);
     line.callback = callback;
     line.tab_callback = tab_callback;
     line.enter_callback = enter_callback;
+    line.backspace_callback = backspace_callback;
     line.prompt = tu_str("> ");
     line.nl_prompt = tu_str(". ");
     printf("Termline by BusyBeaver\nTry entering Lorem ipsum or colors (red, green, ...)\nType `help` to see keybinds\nType `exit` or use Ctrl+D to exit\n");
@@ -209,7 +239,7 @@ int main(void) {
             printf("exit\n");
             break;
         } else if(line.exit_reason == TL_EXIT_ENTER && line.len > 0) {
-            printf("bytes inputed: %i\n", line.len);
+            printf("bytes inputted: %i\n", line.len);
             tl_hist_add(&line, line.s, line.len);
         }
         if(line.len == 4 && memcmp(line.s, "help", 4) == 0) printf("%s", help_message);

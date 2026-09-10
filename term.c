@@ -365,11 +365,13 @@ typedef struct {
     bool mark_weak;
 } lhrec_t; // line history record
 
-// text formating sequences of the form \e\[[0-9;]*m, like those TERM_COLOR_*
+// ansi text formating sequences of the form \e\[[0-9;]*m, like those TERM_COLOR_*
+// colors are applied to the text in termline_t at bytes indicated by .at fields
+// when multiple colors are at the same .at, the order is decided by .prio, this also interacts with .hint_prio in termline_t
 typedef struct {
-    char *s;
-    int len;
-    unsigned int at; // before which byte to put it
+    char *s; // the sequence; must be of the format \e[[0-9;]*m (\33[ then any number of 0-9 or ; characters then m)
+    int len; // byte length of s
+    unsigned int at; // before which byte to put it; should be in range [0, len], len means after the last byte
     unsigned int prio; // smaller go first; non-negative only
 } tu_color_t;
 
@@ -386,27 +388,67 @@ struct termline_s {
     // === user-facing fields ===
     char *s; // the entered text
     int len, cap;
-    int cursor, mark; // the selection is from mark to cursor; no selection when mark < 0
+    int cursor; // the byte od the text (not including prompt, just actual editable text) the cursor is on; always in range [0, len]
+    int mark; // the selection is from mark to cursor; no selection when mark < 0
     bool mark_weak; // signals the state like just after yanking when doing anything removes selection; meaningless when mark < 0
 
-    void (*tab_callback)(termline_t* line, const tu_input_t *tab);
-    int (*callback)(termline_t* line, int *lowest_change, bool text_changed, bool cursor_changed);
-    bool (*enter_callback)(termline_t* line, const tu_input_t *enter);
+    // all callbacks can be left as NULL for default action
+
+    // called on a press of the Tab key; should fill in tab-completion options with tl_add_tab_compl
+    // `tab` is the tab key press; might have modifiers (TU_MOD_*)
+    void (*tab_callback)(termline_t *line, const tu_input_t *tab);
+
+    // called before displaying new version of the text to the screen
+    // should set .hint, .preview and highlight
+    // .hint and .preview are in user's ownership, i.e. not freed in tl_free
+    // to make hint and preview colored, one should manually set and unset color with ansi codes in .hint and .preview, e.g. "\33[2mHint text\33[22m"
+    // or use .highlights to surround hint with color set and unset, both at the byte on the cursor (.cursor), enploying hint_prio
+    // When including coloring within .hint, one should not use total color reset (\33[0m or \33[m) at the end because that can mess with text selection
+    // To manipulate formatting of the text, change .highlights dynamic array. Append with tu_color_arr_append, pop by decrementing .highlights.len
+    // or manipulate directly with .highlights.p[index]. .highlights is owned by the termline, i.e. it will be freed in tl_free, but individual strings are user-owned
+    // (should probably be statically allocated)
+    // *lowest_change must be lowered to the smallest of the followng:
+    //  - current value of *lowest_change
+    //  - index of the lowest byte in `.s` that the callback has altered
+    //  - new length if .len has been lowered
+    //  - the lowest .at of a color that it has changed/added/removed in .highlights
+    // setting *lowest_change to 0 is safe but adds the overhead of rerendering every time
+    // text_changed and cursor_changed indicate whether respective things might have changed since the last call to this callback
+    // RETURNS: 0 if the callback hasn't changed anything, 1 if it has changed text or preview or highlights but not hint, 2 if it has changed .hint
+    //          returning 2 always is safe but might cause unnecesary rerenders
+    int (*callback)(termline_t *line, int *lowest_change, bool text_changed, bool cursor_changed);
+
+    // called on a press of the Enter key of Ctrl+J; when returns true, tl_interact returns with .exit_reason = TL_EXIT_ENTER
+    // tl_set_newline may also be called from this called to alter what is inserted instead of newline (if false is returned)
+    // like "\n     " to get newline with indent
+    bool (*enter_callback)(termline_t *line, const tu_input_t *enter);
+
+    // called on a press of the Backspace key; should return the number of bytes to erase or -1 to get the regular action of Backspace (erase 1 printable character)
+    // may be useful to erase multiple spaces of indentation at once
+    int (*backspace_callback)(termline_t *line, const tu_input_t *backspace);
 
     tu_cstr_t prompt; // prompt that's shown once before all user's input
     tu_cstr_t nl_prompt; // prompt shown after a newline in user's input; like "> " in bash/sh/zsh or "... " in python
 
     tu_cstr_t selection_begin, selection_end; // how to highlight selection; should be ANI CSs, \e\[[0-9;]*m
 
-    tu_color_arr_t highlights;
+    tu_color_arr_t highlights; // user-manipulated array of ansi control sequences coloring the text; see comments to tu_color_t
+                               // order of elements does not matter, .at and .prio determine displayed order
     tu_cstr_t hint; // inline hint shown at the cursor; is set to len=0 when in search mode
     tu_cstr_t preview; // line shown at the bottom; not displayed when in search mode
 
     int exit_reason; // TL_EXIT_*
     int error; // TERM_ERR_*
 
+    int selection_prio; // priority of selection_begin color
+    int unselection_prio; // priority of selection_end color
+    int reselection_prio; // priority of reintroducing selection_begin after a user's color reset (\e[0m or \e[m) within the selection
+    int hint_prio; // priority of hint string relative to colors
+
     // === internal fields ===
-    content_t content;
+    content_t content; // the whole displayed content including prompts etc
+
+    struct tu_str_s newline; // just for tracking tl_set_newline
 
     int magnet; // the column where the cursor "magnets" towards when navigating up/down; -1 for current cursor culumn
 
@@ -435,11 +477,6 @@ struct termline_s {
 
     tu_tab_arr_t tab_compls;
     int tab_option;
-
-    int selection_prio; // priority of selection_begin color
-    int unselection_prio; // priority of selection_end color
-    int reselection_prio; // priority of reintroducing selection_begin after a user's color reset (\e[0m or \e[m) within the selection
-    int hint_prio; // priority of hint string relative to colors
 };
 
 // create a default termline
@@ -458,7 +495,13 @@ void tl_free(termline_t *line);
 void tl_hist(termline_t *line, int i);
 
 // add tab completion option; this should only be called from tab_callback
-void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignred_part);
+// ignored_part is how many bytes from the beginning are not pasted into the text, e.g. if you suuggest to complete "br" as
+// either "brother" or "brain", you chould call tl_add_tab_compl on full strings, so that full strings are shown as completion options underneeth the text
+// but set ignored_part to 2 so that we don't get "brbrother"/"brbrain" in the text
+void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignored_part);
+
+// set string inserted on Enter key (instead of "\n" by default); should only be called from enter_callback
+void tl_set_newline(termline_t *line, const char *s, int len);
 
 // types of modifications an lhrec could be saved after
 #define LHREC_INIT           0
@@ -606,6 +649,17 @@ void tl_hist_clear(termline_t *line);
 // ====== \/ IMPLEMENTATION \/ =====
 #if TERMLINE_IMPLEMENTATION
 
+// Prefixes: term_*, TERM_ - terminal-related utilities
+//           tu_*          - general utilities
+//           content_*     - functions on content_t
+//           tl_*          - functions on termline_t
+//           TU_KEY_*         - non-printable key representations
+//           TU_MOD_*         - key modifier bits (for CTRL/ALT/SHIFT/numpad)
+//           LHREC_*       - inline history (for undo/redo) record types
+// _-postfixed functions are those with unbeautiful encapsulation boundaries
+// `_varname` mostly means `varname` but "previous"/"past"
+// `varname_` mostly means `varname` but "next"/"future"
+
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -622,14 +676,6 @@ void tl_hist_clear(termline_t *line);
 #include <errno.h>      // for testing and restoring errno after pselect
 #endif
 
-// Pefixes: term_*, TERM_ - terminal-related utilities
-//          tu_*          - general utilities
-//          content_*     - functions on content_t
-//          tl_*          - functions on termline_t
-//          TU_KEY_*         - non-printable key representations
-//          TU_MOD_*         - key modifier bits (for CTRL/ALT/SHIFT/numpad)
-//          LHREC_*       - inline history (for undo/redo) record types
-// _-postfixed functions are those with unbeautiful encapsulation boundaries
 const char *const term_error_names[] = {
     [TERM_ERR_GETPOS]  = "Error retriving cursor position",
     [TERM_ERR_GETSIZE] = "Error retriving window size",
@@ -1602,11 +1648,17 @@ void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width
 }
 
 content_t content_create(FILE *in, FILE *out) {
+    #if TU_SYSTEM == TU_POSIX
+    char *term = getenv("TERM");
+    bool linux_tty = term != NULL && strcmp(term, "linux") == 0;
+    #else
+    bool linux_tty = false;
+    #endif
     content_t t = (content_t){
 //        .s = NULL, .len = 0, .cap = 0,
         // .line_sizes = NULL, .n_lines = 0,
         .out = out, .in = in,
-        .split_wchars = false, // todo: figure this out
+        .split_wchars = linux_tty, // in linux non-graphical tty 2-wide characters can be sliced in half by a line wrap
         .input_buf = (str_t){ .s = NULL, .len = 0, .cap = 0 },
         .error = 0,
         .cursor_byte = 0,
@@ -1726,9 +1778,9 @@ void content_render_from(content_t *t, int start, bool extra_overwrite) {
 }
 
 void content_change(content_t *t, int start, const char *cont, int len) {
+    if(t->error) return;
     assert(0 <= start && start <= t->len);
     assert(len >= 0);
-    if(t->error) return;
     int _t_len = t->len;
     bool item_cut = false; // if we are _possibly_ cutting an item
     int b = start;
@@ -1916,8 +1968,8 @@ void tl_hist(termline_t *line, int i) {
     line->hist_idx = i;
 }
 
-void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignred_part) {
-    tu_tab_t compl = { NULL, .ignored = ignred_part };
+void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignored_part) {
+    tu_tab_t compl = { NULL, .ignored = ignored_part };
     str_append((str_t*)&compl, s, len);
     tu_tab_arr_append(&line->tab_compls, &compl, 1);
 }
@@ -2230,6 +2282,11 @@ static bool tu_is_wordy(char c, int big) {
            (unsigned char)c > 0x20 && c != '\377' && big;
 }
 
+void tl_set_newline(termline_t *line, const char *s, int len) {
+    line->newline.len = 0;
+    str_append(&line->newline, s, len);
+}
+
 int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     str_t temp = { NULL };
@@ -2241,7 +2298,7 @@ int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int
             tl_lhrec(line, tu_is_wordy(inputs->c, false) ? LHREC_INSERT_WORD : LHREC_INSERT_NONWORD, true);
             str_append(&temp, inputs->s, inputs->len);
             line->raw_insert = false;
-        } else if(k == TU_KEY_ENTER) {
+        } else if(k == TU_KEY_ENTER || k == 'J' && (key & TU_MOD_CTRL)) {
             bool do_exit = true;
             if(line->enter_callback) {
                 if(temp.len) {
@@ -2249,10 +2306,15 @@ int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int
                     tl_insert(line, true, line->cursor, temp.s, temp.len);
                     temp.len = 0;
                 }
+                line->newline.len = 0;
+                str_append_lit(&line->newline, "\n");
                 do_exit = line->enter_callback(line, inputs);
             }
             if(do_exit) { line->exit_reason = TL_EXIT_ENTER; break; }
-            else { tl_lhrec(line, LHREC_INSERT_NEWLINE, true); str_append(&temp, "\n", 1); }
+            else {
+                tl_lhrec(line, LHREC_INSERT_NEWLINE, true);
+                str_append(&temp, line->newline.s, line->newline.len);
+            }
         } else if(k == TU_KEY_INVALID_CP) {
             tl_lhrec(line, LHREC_INSERT_WORD, true);
             str_append(&temp, "\xEF\xBF\xBD", 3);
@@ -2395,8 +2457,6 @@ int tl_handle_arrows(termline_t *line, int *lowest_change, tu_input_t *inputs, i
     return _len - len;
 }
 
-// todo: process Ctrl+J (\n)
-
 int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
     int _len = len;
     int at = line->cursor, l = 0;
@@ -2450,11 +2510,19 @@ int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, in
                 l = (w == 0 ? e : b) - at;
             }
         } else if(k == TU_KEY_BACKSPACE || k == 'H' && (key & TU_MOD_CTRL)) {
+            int n = -1;
+            if(line->backspace_callback) {
+                tl_kill(line, at, l, false);
+                at = line->cursor; l = 0;
+                n = line->backspace_callback(line, inputs);
+            }
             if(at > 0) tl_lhrec(line, tu_is_wordy(line->s[at - 1], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
-            int b = at, e = at, w = 0;
-            while(b > 0 && w == 0) tu_item_boundary(line->s, line->len, b - 1, &b, &e, &w);
-            l += at - b;
-            at = b;
+            if(n < 0) {
+                int b = at, e = at, w = 0;
+                while(b > 0 && w == 0) tu_item_boundary(line->s, line->len, b - 1, &b, &e, &w);
+                l += at - b;
+                at = b;
+            } else { at -= n; l += n; }
         } else break;
     }
     tl_kill(line, at, l, false);
@@ -2752,6 +2820,7 @@ int tl_handle_tabs(termline_t *line, int *lowest_change, tu_input_t *inputs, int
                 } else if(line->tab_compls.len == 1) {
                     char *s = line->tab_compls.p[0].s + line->tab_compls.p[0].ignored;
                     int len = line->tab_compls.p[0].len - line->tab_compls.p[0].ignored;
+                    if(line->cursor < *lowest_change) *lowest_change = line->cursor;
                     str_stretch((str_t*)line, line->len + len);
                     if(line->cursor < line->len)
                         memmove(line->s + line->cursor + len, line->s + line->cursor, line->len - line->cursor);
@@ -2806,7 +2875,8 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
         len -= consumed;
     }
     out:
-    bool text_changed = lowest_change != line->len || lowest_change != _len || first_run;
+    bool normal_mode = !line->hist_search && !line->tab_compls.len;
+    bool text_changed = lowest_change != line->len || lowest_change != _len || first_run || normal_mode != _normal_mode;
     int r = 0;
     if(line->callback && !line->hist_search && !line->tab_compls.len) {
         r = line->callback(line, &lowest_change, text_changed, line->cursor != _cb);
@@ -2826,7 +2896,6 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
         if(_selected && _mark      < lowest_change) lowest_change = _mark;
     }
 //    DEBUG("after: %i\n", lowest_change);
-    bool normal_mode = !line->hist_search && !line->tab_compls.len;
     return normal_mode && _normal_mode && !hint_changed && lowest_change == _len && lowest_change == line->len && r == 0 ? -1 : lowest_change;
 }
 
@@ -2889,6 +2958,7 @@ void tl_free(termline_t *line) {
     free(line->search.s);
     free(line->handlers.p);
     free(line->highlights.p);
+    free(line->newline.s);
 }
 
 void tl_hist_add(termline_t *line, char *s, int len) {
@@ -2929,7 +2999,11 @@ void tl_interact(termline_t *line) {
     str_t temp = { .s = NULL, .len = 0, .cap = 0 };
     bool first_run = true;
     for(;;) {
-        if(t->error) { line->exit_reason = TL_EXIT_ERROR; goto ret; }
+        if(t->error) {
+            line->exit_reason = TL_EXIT_ERROR;
+            line->error = t->error;
+            goto ret;
+        }
 //        int x = term_get_pos(stdout, stdin, t->input_buf).x;
 ////        printf("\r\n%i\r\n", x);
 //        printf("\33[9999D\33[20C");
