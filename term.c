@@ -88,7 +88,7 @@ typedef struct {
 } tu_cstr_t;
 
 // construct one out of string literal
-#define tu_str(lit) (tu_cstr_t){ .s = lit, .len = sizeof(lit) - 1 }
+#define tu_str(lit) (tu_cstr_t){ .s = (char*)lit, .len = sizeof(lit) - 1 }
 
 // put terminal into raw mode
 // returns 0 on success, -1 on error
@@ -381,7 +381,7 @@ typedef struct {
     unsigned int prio; // smaller go first; non-negative only
 } tu_color_t;
 
-#define tu_color(lit, _at, _prio) (tu_color_t){ .s = lit, .len = sizeof(lit) - 1, .at = _at, .prio = _prio }
+#define tu_color(lit, _at, _prio) (tu_color_t){ .s = (char*)lit, .len = sizeof(lit) - 1, .at = _at, .prio = _prio }
 
 tu_implement_arr_struct(tu_color_arr, tu_color_t)
 void tu_color_arr_append(tu_color_arr_t *arr, tu_color_t *cont, int len); // append len colors from `cont` to `arr`
@@ -440,6 +440,9 @@ struct termline_s {
 
     tu_color_arr_t highlights; // user-manipulated array of ansi control sequences coloring the text; see comments to tu_color_t
                                // order of elements does not matter, .at and .prio determine displayed order
+                               // use \e[0m or \e[m for resetting color in highlights because selection is aware of color resets in highlights and
+                               // reintroduces itself with reselection_prio; also using total color resets is better because the way user color is reintroduced
+                               // after things like newline prompts is just by reprinting all user's ANSI sequences in order starting from the last user's total color reset
     tu_cstr_t hint; // inline hint shown at the cursor; is set to len=0 when in search mode
     tu_cstr_t preview; // line shown at the bottom; not displayed when in search mode
 
