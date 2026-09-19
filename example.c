@@ -1,4 +1,15 @@
 // This is example usage of Termline library
+// Features of this example:
+// First few words of Lorem ipsum sre autosuggested (hinted) and tab-completed
+//   (see `hint` section in `callback` and `tab_callback`)
+// some color names in lowercase are highlighted in the respective colors
+//   (see `highlights` section in `callback`)
+// 4-space indents are auto-inserted on Enter with respect to {} count and auto-deleted on Backspace and }
+//   (see `enter_callback`, `backspace_callback` and `unindent_handler`)
+// multiline mode is entered with pressing Enter on a line with \ at the end; to send a multiline command use Alt+Enter
+//   (see `enter_callback`)
+// Preview displays the number of bytes in the entered text and the number of bytes selected (with Ctrl+Space or Ctrl+X)
+//   (see `preview` section in `callback`)
 // All callbacks are optional, jump straight to `int main` to see the main code
 
 #define TERMLINE_IMPLEMENTATION 1
@@ -25,14 +36,12 @@ char *help_message =
 "Ctrl+U: Kill from cursor to beginning of line\n"
 "Ctrl+K: Kill from cursor to end of line\n"
 "Alt+w: Kill selected text\n"
-"Ctrl+W: Kill from cusor to Word (space-delimited) beginning\n"
-"Alt+Backspace: Kill from cusor to word ([0-9a-zA-Z_] and any\n"
-"               non-ASCII Unicode) beginning\n"
-"Alt+D: Kill from cusor to word ([0-9a-zA-Z_] and any non-ASCII\n"
-"       Unicode) end\n"
+"Ctrl+W: Kill from cusor to a Word* beginning to the left\n"
+"Alt+Backspace: Kill from cusor to a word** beginning to the left\n"
+"Alt+d: Kill from cusor to a word** end to the right\n"
 "Ctrl+2 or Ctrl+@ or Ctrl+Space: Set mark, denoting a boundary of\n"
-"                                selection\n"
-"Ctrl+X, Alt+x: Swap cursor with mark; if one does not exist, place\n"
+"                                the selection\n"
+"Ctrl+X, Alt+x: Swap cursor with mark; if mark does not exist, place\n"
 "               it at the beginning or at the end respectively\n"
 "Ctrl+Y: Paste and select text from last entry of killring, ignoring\n"
 "        existing selection\n"
@@ -40,9 +49,8 @@ char *help_message =
 "       existing selection\n"
 "Ctrl+T: Swap character under cursor with one to the left and move\n"
 "        right\n"
-"Alt+t, Alt+T: Swap word ([0-9a-zA-Z_] and any non-ASCII Unicode) or\n"
-"              Word (space-delimited) under cursor with one to the\n"
-"              left and move right, respectively\n"
+"Alt+t, Alt+T: Swap word* or Word* respectively under cursor with one\n"
+"              to the left and move right\n"
 "Ctrl+C: Stop editing, leaving the appearence as is (hints,\n"
 "        selection etc)\n"
 "Ctrl+L: Rerender all content\n"
@@ -67,7 +75,9 @@ char *help_message =
 "Tab, Shift+Tab: Insert the completion if just one is available, or\n"
 "                scroll through completions forwards or backwards\n"
 "                respectively\n"
-"Clrl+G: Remove selection, exit tab menu or search mode\n";
+"Clrl+G: Remove selection, exit tab menu or search mode\n"
+"* Word is a space-delimited chunk of text\n"
+"** word consists of [0-9a-zA-Z_] and any non-ASCII Unicode\n";
 
 char *hinted_words[] = { "Lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed", "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore", "magna", "aliqua", "Ut", "enim", "ad", "minim", "veniam", "quis", "nostrud", "exercitation", "ullamco", "laboris", "nisi", "aliquip", "ex", "ea", "commodo", "consequat", "Duis", "aute", "irure", "in", "reprehenderit", "voluptate", "velit", "esse", "cillum", "eu", "fugiat", "nulla", "pariatur", "Excepteur", "sint", "occaecat", "cupidatat", "non", "proident", "sunt", "culpa", "qui", "officia", "deserunt", "mollit", "anim", "id", "est", "laborum" };
 
@@ -117,8 +127,8 @@ int callback(termline_t *line, int *lowest_change, bool text_changed, bool curso
         line->hint.s = hint_text;
     }
 
-    if(!any_changed) goto ret;
     // === preview ===
+    if(!any_changed) goto ret;
     if(line->len == 0) {
         line->preview.len = 0;
     } else {
@@ -171,7 +181,7 @@ int callback(termline_t *line, int *lowest_change, bool text_changed, bool curso
 
 // tab completion options
 void tab_callback(termline_t *line, const tu_input_t *inp) {
-    // makeing Tab insert "    " indent when at line beginning
+    // making Tab insert "    " indent when at line beginning
     bool at_line_beginning = true;
     for(int i = line->cursor - 1; i >= 0 && line->s[i] != '\n'; i --)
         at_line_beginning &= line->s[i] == ' ';
@@ -190,17 +200,22 @@ void tab_callback(termline_t *line, const tu_input_t *inp) {
     }
 }
 
+// returns whether we need to send command (exit interactive mode)
 bool enter_callback(termline_t *line, const tu_input_t *enter) {
     if(enter->key & TU_MOD_ALT) return true;
     // repeating indent
     int line_begin = line->cursor;
     while(line_begin > 0 && line->s[line_begin - 1] != '\n') line_begin --;
-    int space_count = 0; // indent depth
-    for(int i = line_begin; i < line->len && line->s[i] == ' '; i ++) space_count ++;
-    char *indent = malloc(space_count + 1);
+    int indent_len = 0;
+    int i;
+    for(i = line_begin; i < line->cursor && line->s[i] == ' '; i ++) indent_len ++;
+    int _i = i;
+    for(; i < line->cursor; i ++) indent_len += ((line->s[i] == '{') - (line->s[i] == '}') * (i != _i)) * 4;
+    if(indent_len < 0) indent_len = 0;
+    char *indent = malloc(indent_len + 1);
     indent[0] = '\n';
-    memset(indent + 1, ' ', space_count);
-    tl_set_newline(line, indent, space_count + 1); // setting `indent` to be inserted insted of '\n'
+    memset(indent + 1, ' ', indent_len);
+    tl_set_newline(line, indent, indent_len + 1); // setting `indent` to be inserted insted of '\n'
     free(indent);
 
     if(line->cursor == line->len && line->len > 0 && line->s[line->len - 1] == '\\') return false;
@@ -209,14 +224,34 @@ bool enter_callback(termline_t *line, const tu_input_t *enter) {
     return !multiline;
 }
 
-int backspace_callback(termline_t *line, const tu_input_t *backspace) {
+// number of spaces to erase to the right of the cursor on Backspace or } insertion
+// returns 0 if cursor is not right after "^ +" (read as regex)
+int unindenting_length(termline_t *line) {
     int line_begin = line->cursor;
     while(line_begin > 0 && line->s[line_begin - 1] != '\n') line_begin --;
     bool is_indent = true;
     for(int i = line_begin; i < line->cursor; i ++) is_indent &= line->s[i] == ' ';
-    if(is_indent && line_begin < line->cursor)
-        return (line->cursor - line_begin) > 4 ? 4 : (line->cursor - line_begin);
-    return -1;
+    if(!is_indent) return 0;
+    return (line->cursor - line_begin) > 4 ? 4 : (line->cursor - line_begin);
+}
+
+// handles } to make them auto-unindent
+int unindent_handler(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
+    int unlen = unindenting_length(line);
+    if(inputs->key == '}' && unlen) {
+        tl_lhrec(line, LHREC_INSERT_WORDY, true);
+        if(unlen) tl_kill(line, line->cursor - unlen, unlen, false);
+        if(line->cursor < *lowest_change) *lowest_change = line->cursor;
+        tl_insert(line, true, line->cursor, "}", 1);
+        return 1;
+    }
+    return 0;
+}
+
+// returns how many bytes to delete on backspace or -1 for default action
+int backspace_callback(termline_t *line, const tu_input_t *backspace) {
+    int unlen = unindenting_length(line);
+    return unlen ? unlen : -1;
 }
 
 int main(void) {
@@ -226,9 +261,10 @@ int main(void) {
     line.tab_callback = tab_callback;
     line.enter_callback = enter_callback;
     line.backspace_callback = backspace_callback;
+    tl_prepend_handler(&line, &(tu_handler_t){ .handle = unindent_handler });
     line.prompt = tu_str("> ");
     line.nl_prompt = tu_str(". ");
-    printf("Termline by BusyBeaver\nTry entering Lorem ipsum or colors (red, green, ...)\nType `help` to see keybinds\nType `exit` or use Ctrl+D to exit\n");
+    printf("Termline by BusyBeaver\r\nTry entering Lorem ipsum or colors (red, green, ...)\r\nType `help` to see keybinds\r\nType `exit` or use Ctrl+D to exit\r\n");
     for(;;) {
         tl_interact(&line);
         if(line.exit_reason == TL_EXIT_ERROR) {

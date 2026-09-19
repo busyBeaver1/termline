@@ -248,7 +248,7 @@ typedef struct {
     int len, cap;
     // int *line_lengths; // visible character counts in logical lines (disregarding wrapping)
     // int n_lines; // number of logical lines
-  int origin; // y position of origin
+    int origin; // y position of origin
     int width, height; // of terminal window
     FILE *out; // file pointing to terminal (output only) (presumably just stdout)
     FILE *in; // file pointing to terminal (input only) (presumably just stdin)
@@ -344,16 +344,18 @@ typedef struct {
 
 // input handlers; called sequentially; each consumes/handles some number of keystrokes/inputs; when no handler consumes an input, it is discarded
 // when a number of inputs is consumed by a different handler [than this one] or an input is discarded, and unhandle [this one] is defined, it is called on those inputs
+// see also: tl_append_handler, tl_prepend_handler
 typedef struct {
     // - line: the termline to make changes upon
-    // - t: for reference only; the content currently displayed
     // - lowest_change: write the lowest byte you've altered in line->s here, if it's lower than the current value of *lowest_change
-    // - inputs: the keystrokes to handle; the handler should consume a numer of consecative keystrokes starting at index 0 that are of the kind this handler cares about
+    // - inputs: the keystrokes to handle; the handler should consume a numer of consecutive keystrokes starting at index 0 that are of the kind this handler cares about
+    //           it should consume at least one input if there are inputs of the kinf it cares about but not necessery all of them
     // - len: the numer of inputs available
     // returns: the number of inputs handled/consumed
-    int (*handle)(termline_t *line, int *lowest_change, tu_input_t *inputs, int len); // not nullable
+    int (*handle)(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len); // not nullable
 
-    void (*unhandle)(termline_t *line, tu_input_t *inputs, int len); // nullable
+    // should not modify text/colors/hint/preview
+    void (*unhandle)(termline_t *line, const tu_input_t *inputs, int len); // nullable
 } tu_handler_t;
 
 typedef struct {
@@ -489,6 +491,12 @@ termline_t tl_create(FILE *in, FILE *out);
 // free all allocated fields of a termline
 void tl_free(termline_t *line);
 
+// append an input handler to the end or to the beginning of the handlers array;
+// handlers are prioritiezed by order, i.e. calling tl_prepend_handler creates a handler of highest priority
+// see also: tu_handler_t
+void tl_append_handler(termline_t *line, const tu_handler_t *handler);
+void tl_prepend_handler(termline_t *line, const tu_handler_t *handler);
+
 // reasons why tl_interact can return
 #define TL_EXIT_ERROR      1 // an error has hapened; see .error in termline_t
 #define TL_EXIT_ENTER      3 // normal exit after Enter from user
@@ -508,18 +516,17 @@ void tl_add_tab_compl(termline_t *line, const char *s, int len, int ignored_part
 void tl_set_newline(termline_t *line, const char *s, int len);
 
 // types of modifications an lhrec could be saved after
-#define LHREC_INIT           0
-#define LHREC_MOVE           1
-#define LHREC_INSERT_WORD    2
-#define LHREC_INSERT_NONWORD 3
-#define LHREC_INSERT_NEWLINE 4
-#define LHREC_KILL_WORD      5
-#define LHREC_KILL_NONWORD   6
-#define LHREC_YANK           7
-#define LHREC_LH             8
-#define LHREC_HIST           9
-#define LHREC_TAB           10
-#define LHREC_INDEP         11
+#define LHREC_INIT            0
+#define LHREC_MOVE            1 // cursor movement
+#define LHREC_INSERT_WORDY    2 // insertion of a "wordy" character (non-big) (see tu_is_wordy)
+#define LHREC_INSERT_NONWORDY 3 // insertion of a non-"wordy" character (non-big) (see tu_is_wordy)
+#define LHREC_INSERT_NEWLINE  4 // usual Enter press
+#define LHREC_KILL_WORDY      5 // deletion of a "wordy" character; killring kills go to INDEP
+#define LHREC_KILL_NONWORDY   6 // deletion of a non-"wordy" character
+#define LHREC_YANK            7 // pasting
+#define LHREC_HIST            9 // history (not inline, actual commends) scrolling
+#define LHREC_TAB            10 // tab suggestion
+#define LHREC_INDEP          11 // any action that should be recorded separately no matter for previous lhrec type
 
 // save an lhrec in case type is diferent from the previous one
 // only advances current lhrec index in case `advanse = true`
@@ -596,8 +603,13 @@ int tl_cont2text(termline_t *line, int cursor_byte);
 // i.e. colors are "coupled" with bytes their `at`s point to
 int tl_text2cont(termline_t *line, int text_byte, tu_color_arr_t *colors);
 
+// inserts text at the byte `at`. Does not save undo hist (use tl_lhrec)
+// auto-moves cursor and mark
+// before_cursor controls whether the cursor is moved in case at==line->cursor (otherwise meaningless)
 void tl_insert(termline_t *line, bool before_cursor, int at, char *s, int len);
 
+// deletes text at the byte `at` of length (bytes) `len`
+// auto-moves cursor and mark
 void tl_kill(termline_t *line, int at, int len, bool to_killring);
 
 // uppercase or lowercase part of the text
@@ -619,20 +631,20 @@ void tl_move_h(termline_t *line, int move); // horisontal
 void tl_move_v(termline_t *line, const content_t *t, int move); // vertical
 void tl_move_H(termline_t *line, int move); // big horisontal (Home/End)
 
-// input handlert
-int tl_handle_text    (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_arrows  (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_kills   (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_yanks   (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-void tl_unhandle_yanks(termline_t *line, tu_input_t *inputs, int len);
-int tl_handle_swaps   (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_controls(termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_case    (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_lh      (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-int tl_handle_hist    (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-void tl_unhandle_hist (termline_t *line, tu_input_t *inputs, int len);
-int tl_handle_tabs    (termline_t *line, int *lowest_change, tu_input_t *inputs, int len);
-void tl_unhandle_tabs (termline_t *line, tu_input_t *inputs, int len);
+// default input handlert
+int tl_handle_text    (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_arrows  (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_kills   (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_yanks   (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+void tl_unhandle_yanks(termline_t *line, const tu_input_t *inputs, int len);
+int tl_handle_swaps   (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_controls(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_case    (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_lh      (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+int tl_handle_hist    (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+void tl_unhandle_hist (termline_t *line, const tu_input_t *inputs, int len);
+int tl_handle_tabs    (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
+void tl_unhandle_tabs (termline_t *line, const tu_input_t *inputs, int len);
 
 int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_run);
 
@@ -2295,7 +2307,7 @@ void tl_set_newline(termline_t *line, const char *s, int len) {
     str_append(&line->newline, s, len);
 }
 
-int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_text(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     str_t temp = { NULL };
     for(; len > 0; len --, inputs ++) {
@@ -2303,7 +2315,7 @@ int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int
         uint32_t k = key & TU_NON_MOD;
 //        if(key & TU_NON_CHAR && k != TU_KEY_ENTER && k != TU_KEY_INVALID_CP) break;
         if(line->raw_insert || (key & TU_NON_CHAR) == 0 && line->hist_search == 0) {
-            tl_lhrec(line, tu_is_wordy(inputs->c, false) ? LHREC_INSERT_WORD : LHREC_INSERT_NONWORD, true);
+            tl_lhrec(line, tu_is_wordy(inputs->c, false) ? LHREC_INSERT_WORDY : LHREC_INSERT_NONWORDY, true);
             str_append(&temp, inputs->s, inputs->len);
             line->raw_insert = false;
         } else if(k == TU_KEY_ENTER || k == 'J' && (key & TU_MOD_CTRL)) {
@@ -2324,7 +2336,7 @@ int tl_handle_text(termline_t *line, int *lowest_change, tu_input_t *inputs, int
                 str_append(&temp, line->newline.s, line->newline.len);
             }
         } else if(k == TU_KEY_INVALID_CP) {
-            tl_lhrec(line, LHREC_INSERT_WORD, true);
+            tl_lhrec(line, LHREC_INSERT_WORDY, true);
             str_append(&temp, "\xEF\xBF\xBD", 3);
         } else if(k == 'V' && (key & TU_MOD_CTRL)) {
             line->raw_insert = true;
@@ -2410,7 +2422,7 @@ void tl_move_H(termline_t *line, int move) {
 //    return ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 //}
 
-int tl_handle_arrows(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_arrows(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     content_t _t = line->content;
     _t.s = NULL; _t.len = 0; _t.cap = 0;
     int _len = len;
@@ -2465,7 +2477,7 @@ int tl_handle_arrows(termline_t *line, int *lowest_change, tu_input_t *inputs, i
     return _len - len;
 }
 
-int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_kills(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     int at = line->cursor, l = 0;
     for(; len > 0; len --, inputs ++) {
@@ -2510,7 +2522,7 @@ int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, in
             }
         } else if(k == TU_KEY_DELETE || k == 'D' && (key & TU_MOD_CTRL)) {
             if(at + l < line->len) {
-                tl_lhrec(line, tu_is_wordy(line->s[at + l], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
+                tl_lhrec(line, tu_is_wordy(line->s[at + l], false) ? LHREC_KILL_WORDY : LHREC_KILL_NONWORDY, true);
                 int e;
                 tu_item_boundary(line->s, line->len, at + l, NULL, &e, NULL);
                 int b = e, w = 0;
@@ -2524,7 +2536,7 @@ int tl_handle_kills(termline_t *line, int *lowest_change, tu_input_t *inputs, in
                 at = line->cursor; l = 0;
                 n = line->backspace_callback(line, inputs);
             }
-            if(at > 0) tl_lhrec(line, tu_is_wordy(line->s[at - 1], false) ? LHREC_KILL_WORD : LHREC_KILL_NONWORD, true);
+            if(at > 0) tl_lhrec(line, tu_is_wordy(line->s[at - 1], false) ? LHREC_KILL_WORDY : LHREC_KILL_NONWORDY, true);
             if(n < 0) {
                 int b = at, e = at, w = 0;
                 while(b > 0 && w == 0) tu_item_boundary(line->s, line->len, b - 1, &b, &e, &w);
@@ -2562,7 +2574,7 @@ static void tl_paste_(termline_t *line, int *lowest_change, char *s, int len) {
     line->mark_weak = true;
 }
 
-int tl_handle_yanks(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_yanks(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2601,7 +2613,7 @@ int tl_handle_yanks(termline_t *line, int *lowest_change, tu_input_t *inputs, in
     return _len - len;
 }
 
-void tl_unhandle_yanks(termline_t *line, tu_input_t *inputs, int len) {
+void tl_unhandle_yanks(termline_t *line, const tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
         uint32_t k = key & TU_NON_MOD;
@@ -2613,7 +2625,7 @@ void tl_unhandle_yanks(termline_t *line, tu_input_t *inputs, int len) {
     }
 }
 
-int tl_handle_swaps(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_swaps(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2653,7 +2665,7 @@ int tl_handle_swaps(termline_t *line, int *lowest_change, tu_input_t *inputs, in
     return _len - len;
 }
 
-int tl_handle_controls(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_controls(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     content_t *t = &line->content;
     int _len = len;
     for(; len > 0; len --, inputs ++) {
@@ -2674,7 +2686,7 @@ int tl_handle_controls(termline_t *line, int *lowest_change, tu_input_t *inputs,
     return _len - len;
 }
 
-int tl_handle_case(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_case(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2705,7 +2717,7 @@ int tl_handle_case(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     return _len - len;
 }
 
-int tl_handle_lh(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_lh(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     int _lh_idx = line->lh_idx;
     for(; len > 0; len --, inputs ++) {
@@ -2746,7 +2758,7 @@ static int str_search(char *s, int len, char *sub, int sub_len) {
     return -1;
 }
 
-int tl_handle_hist(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_hist(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     bool multiline = false;
     for(int i = 0; i < line->len; i ++) multiline |= (line->s[i] == '\n');
@@ -2797,7 +2809,7 @@ int tl_handle_hist(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     return _len - len;
 }
 
-void tl_unhandle_hist(termline_t *line, tu_input_t *inputs, int len) {
+void tl_unhandle_hist(termline_t *line, const tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
         uint32_t k = key & TU_NON_MOD;
@@ -2806,7 +2818,7 @@ void tl_unhandle_hist(termline_t *line, tu_input_t *inputs, int len) {
     }
 }
 
-int tl_handle_tabs(termline_t *line, int *lowest_change, tu_input_t *inputs, int len) {
+int tl_handle_tabs(termline_t *line, int *lowest_change, const tu_input_t *inputs, int len) {
     int _len = len;
     for(; len > 0; len --, inputs ++) {
         uint32_t key = inputs->key;
@@ -2845,7 +2857,7 @@ int tl_handle_tabs(termline_t *line, int *lowest_change, tu_input_t *inputs, int
     return _len - len;
 }
 
-void tl_unhandle_tabs(termline_t *line, tu_input_t *inputs, int len) {
+void tl_unhandle_tabs(termline_t *line, const tu_input_t *inputs, int len) {
     for(int i = 0; i < len; i ++) {
         uint32_t key = inputs[i].key;
         uint32_t k = key & TU_NON_MOD;
@@ -2932,6 +2944,17 @@ termline_t tl_create(FILE *in, FILE *out) {
     tu_handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_arrows }, 1);
     tu_handler_arr_append(&line.handlers, &(tu_handler_t){ .handle = tl_handle_tabs, .unhandle = tl_unhandle_tabs }, 1);
     return line;
+}
+
+void tl_prepend_handler(termline_t *line, const tu_handler_t *handler) {
+    tu_handler_arr_stretch(&line->handlers, line->handlers.len + 1);
+    memmove(line->handlers.p + 1, line->handlers.p, line->handlers.len * sizeof(tu_handler_t));
+    *line->handlers.p = *handler;
+    line->handlers.len ++;
+}
+
+void tl_append_handler(termline_t *line, const tu_handler_t *handler) {
+    tu_handler_arr_append(&line->handlers, (tu_handler_t*)handler, 1);
 }
 
 void tl_hist_clear(termline_t *line) {
