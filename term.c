@@ -37,10 +37,6 @@
 extern "C" {
 #endif
 
-//int mm = 0;
-//#define malloc(n) (mm++, malloc(n))
-//#define free(n) (mm-=(n!=NULL), free(n))
-
 #ifndef TU_SAFETY_DELAY
 #define TU_SAFETY_DELAY 4 // before rerendering we shall get no resize for this number of ms to make race conditions with resizes less likely
 #endif
@@ -413,7 +409,7 @@ struct termline_s {
     // To manipulate formatting of the text, change .highlights dynamic array. Append with tu_color_arr_append, pop by decrementing .highlights.len
     // or manipulate directly with .highlights.p[index]. .highlights is owned by the termline, i.e. it will be freed in tl_free, but individual strings are user-owned
     // (should probably be statically allocated)
-    // *lowest_change must be lowered to the smallest of the followng:
+    // *lowest_change must be lowered to the smallest of the followng (or smaller but >= 0):
     //  - current value of *lowest_change
     //  - index of the lowest byte in `.s` that the callback has altered
     //  - new length if .len has been lowered
@@ -438,7 +434,7 @@ struct termline_s {
 
     tu_cstr_t selection_begin, selection_end; // how to highlight selection; should be ANI CSs, \e\[[0-9;]*m
 
-    tu_color_arr_t highlights; // user-manipulated array of ansi control sequences coloring the text; see comments to tu_color_t
+    tu_color_arr_t highlights; // user-manipulated library-owned array of ansi control sequences coloring the text; see comments to tu_color_t
                                // order of elements does not matter, .at and .prio determine displayed order
                                // use \e[0m or \e[m for resetting color in highlights because selection is aware of color resets in highlights and
                                // reintroduces itself with reselection_prio; also using total color resets is better because the way user color is reintroduced
@@ -2873,7 +2869,7 @@ void tl_unhandle_tabs(termline_t *line, const tu_input_t *inputs, int len) {
 }
 
 int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_run) {
-    bool _normal_mode = !line->hist_search && !line->tab_compls.len;
+    int _mode = line->hist_search ? 1 : line->tab_compls.len ? 2 : 0;
     int lowest_change = line->len;
     int _len = line->len;
     int _hint_len = line->hint.len;
@@ -2898,12 +2894,13 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
         len -= consumed;
     }
     out:
-    bool normal_mode = !line->hist_search && !line->tab_compls.len;
-    bool text_changed = lowest_change != line->len || lowest_change != _len || first_run || normal_mode != _normal_mode;
+    int mode = line->hist_search ? 1 : line->tab_compls.len ? 2 : 0;
+    bool text_changed = lowest_change != line->len || lowest_change != _len || first_run || mode != _mode;
     int r = 0;
-    if(line->callback && !line->hist_search && !line->tab_compls.len) {
+    if(line->callback) {// && !line->hist_search && !line->tab_compls.len) {
         r = line->callback(line, &lowest_change, text_changed, line->cursor != _cb);
     }
+    if(mode != 0) line->hint.len = 0;
     bool hint_changed = r >= 2 || line->hint.len && _cb != line->cursor;
     if(hint_changed && line->hint.len && line->cursor < lowest_change) lowest_change = line->cursor;
     if(hint_changed && _hint_len      && _cb          < lowest_change) lowest_change = _cb;
@@ -2919,7 +2916,7 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
         if(_selected && _mark      < lowest_change) lowest_change = _mark;
     }
 //    DEBUG("after: %i\n", lowest_change);
-    return normal_mode && _normal_mode && !hint_changed && lowest_change == _len && lowest_change == line->len && r == 0 ? -1 : lowest_change;
+    return mode == 0 && _mode == 0 && !hint_changed && lowest_change == _len && lowest_change == line->len && r == 0 ? -1 : lowest_change;
 }
 
 termline_t tl_create(FILE *in, FILE *out) {
@@ -2996,11 +2993,16 @@ void tl_free(termline_t *line) {
 }
 
 void tl_hist_add(termline_t *line, char *s, int len) {
+    for(int i = line->hist_persistent_len; i < line->hist.len; i ++) {
+        free(line->hist.p[i].s.s);
+        free(line->hist.p[i].e.s);
+    }
     if(line->hist.len <= line->hist_persistent_len)
         tu_hist_stretch(&line->hist, (line->hist.len ++) + 1);
     str_t rec = { NULL };
     str_append(&rec, s, len);
     line->hist.p[line->hist_persistent_len ++] = (histrec_t){ .s = rec };
+    line->hist.len = line->hist_persistent_len;
 }
 
 void tl_interact(termline_t *line) {
