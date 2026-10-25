@@ -2461,7 +2461,7 @@ int tl_handle_arrows(termline_t *line, int *lowest_change, const tu_input_t *inp
         else if(k == TU_KEY_RIGHT && (key & TU_MOD_CTRL) || (k == 'f' || k == 'F') && (key & TU_MOD_ALT))
             { int _cb = line->cursor; line->cursor = tu_search_forward_word(line->s, line->len, line->cursor, false); if(_cb != line->cursor) line->magnet = -1; }
         else if(k == TU_KEY_LEFT  && (key & TU_MOD_CTRL) || (k == 'b' || k == 'B') && (key & TU_MOD_ALT))
-            { int _cb = line->cursor; line->cursor = tu_search_back_word(line->s, line->len, line->cursor, false); if(_cb != line->cursor) line->magnet = -1; }
+            { int _cb = line->cursor; line->cursor = tu_search_back_word(line->s, line->cursor, false); if(_cb != line->cursor) line->magnet = -1; }
         else if(k == TU_KEY_LEFT  || k == 'B' && (key & TU_MOD_CTRL)) tl_move_h(line, -1);
         else if(k == TU_KEY_RIGHT || k == 'F' && (key & TU_MOD_CTRL)) tl_move_h(line, 1);
         else if(k == TU_KEY_HOME  || k == 'A' && (key & TU_MOD_CTRL)) tl_move_H(line, -1);
