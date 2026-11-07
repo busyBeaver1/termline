@@ -384,6 +384,7 @@ void tu_color_arr_append(tu_color_arr_t *arr, tu_color_t *cont, int len); // app
 tu_implement_arr_struct(lhrec_arr, lhrec_t)
 tu_implement_arr_struct(tu_tab_arr, tu_tab_t)
 tu_implement_arr_struct(tu_handler_arr, tu_handler_t)
+tu_implement_arr_struct(tu_input_arr, tu_input_t)
 
 // iteractive prompt
 struct termline_s {
@@ -482,6 +483,8 @@ struct termline_s {
 
     tu_tab_arr_t tab_compls;
     int tab_option;
+
+    tu_input_arr_t input_buf; // storage for input items that get consumed in tl_process_input
 };
 
 // create a default termline
@@ -645,7 +648,7 @@ void tl_unhandle_hist (termline_t *line, const tu_input_t *inputs, int len);
 int tl_handle_tabs    (termline_t *line, int *lowest_change, const tu_input_t *inputs, int len);
 void tl_unhandle_tabs (termline_t *line, const tu_input_t *inputs, int len);
 
-int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_run);
+int tl_process_input(termline_t *line, bool first_run);
 
 // run interactive prompt
 void tl_interact(termline_t *line);
@@ -1968,6 +1971,7 @@ tu_implement_arr_functions(tu_handler_arr, tu_handler_t, static)
 tu_implement_arr_functions(tu_hist, histrec_t, static)
 tu_implement_arr_functions(tu_tab_arr, tu_tab_t, static)
 tu_implement_arr_functions(tu_color_arr, tu_color_t, )
+tu_implement_arr_functions(tu_input_arr, tu_input_t, static)
 
 void tl_hist(termline_t *line, int i) {
     if(i == line->hist_idx) return;
@@ -2329,7 +2333,7 @@ int tl_handle_text(termline_t *line, int *lowest_change, const tu_input_t *input
                 str_append_lit(&line->newline, "\n");
                 do_exit = line->enter_callback(line, inputs);
             }
-            if(do_exit) { line->exit_reason = TL_EXIT_ENTER; break; }
+            if(do_exit) { line->exit_reason = TL_EXIT_ENTER; len --; break; }
             else {
                 tl_lhrec(line, LHREC_INSERT_NEWLINE, true);
                 str_append(&temp, line->newline.s, line->newline.len);
@@ -2678,10 +2682,10 @@ int tl_handle_controls(termline_t *line, int *lowest_change, const tu_input_t *i
             t->resize_pending = true;
         } else if(k == 'C' && (key & TU_MOD_CTRL)) {
             line->exit_reason = TL_EXIT_INTERRUPT;
-            break;
+            len --; break;
         } else if(k == 'D' && (key & TU_MOD_CTRL) && line->len == 0) {
             line->exit_reason = TL_EXIT_EOF;
-            break;
+            len --; break;
         } else break;
     }
     return _len - len;
@@ -2870,7 +2874,9 @@ void tl_unhandle_tabs(termline_t *line, const tu_input_t *inputs, int len) {
     }
 }
 
-int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_run) {
+int tl_process_input(termline_t *line, bool first_run) {
+    tu_input_t *inputs = line->input_buf.p;
+    int len = line->input_buf.len;
     int _mode = line->hist_search ? 1 : line->tab_compls.len ? 2 : 0;
     int lowest_change = line->len;
     int _len = line->len;
@@ -2878,8 +2884,8 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
     int _mark = line->mark;
     bool _selected = line->mark >= 0 && line->mark != line->cursor;
     int _cb = line->cursor;
+    int consumed = 0;
     while(len > 0) {
-        int consumed = 0;
         int by = -1;
         for(int i = 0; i < line->handlers.len; i ++) {
             consumed = line->handlers.p[i].handle(line, &lowest_change, inputs, len);
@@ -2894,8 +2900,11 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
         }
         inputs += consumed;
         len -= consumed;
+        consumed = 0;
     }
     out:
+    inputs += consumed;
+    len -= consumed;
     int mode = line->hist_search ? 1 : line->tab_compls.len ? 2 : 0;
     bool text_changed = lowest_change != line->len || lowest_change != _len || first_run || mode != _mode;
     int r = 0;
@@ -2918,6 +2927,8 @@ int tl_process_input(termline_t *line, tu_input_t *inputs, int len, bool first_r
         if(_selected && _mark      < lowest_change) lowest_change = _mark;
     }
 //    DEBUG("after: %i\n", lowest_change);
+    memmove(line->input_buf.p, inputs, len * sizeof(tu_input_t));
+    line->input_buf.len = len;
     return mode == 0 && _mode == 0 && !hint_changed && lowest_change == _len && lowest_change == line->len && r == 0 ? -1 : lowest_change;
 }
 
@@ -2992,6 +3003,7 @@ void tl_free(termline_t *line) {
     free(line->handlers.p);
     free(line->highlights.p);
     free(line->newline.s);
+    free(line->input_buf.p);
 }
 
 void tl_hist_add(termline_t *line, char *s, int len) {
@@ -2999,8 +3011,10 @@ void tl_hist_add(termline_t *line, char *s, int len) {
         free(line->hist.p[i].s.s);
         free(line->hist.p[i].e.s);
     }
-    if(line->hist.len <= line->hist_persistent_len)
-        tu_hist_stretch(&line->hist, (line->hist.len ++) + 1);
+    if(line->hist.len <= line->hist_persistent_len) {
+        tu_hist_stretch(&line->hist, line->hist.len + 1);
+        line->hist.len ++;
+    }
     str_t rec = { NULL };
     str_append(&rec, s, len);
     line->hist.p[line->hist_persistent_len ++] = (histrec_t){ .s = rec };
@@ -3053,21 +3067,19 @@ void tl_interact(termline_t *line) {
         int len = t->input_buf.len;
 //        DEBUG("%i\n", len);
         int i;
-        tu_input_t *inputs = malloc(len * sizeof(tu_input_t));
-        int n = 0;
         for(i = 0; i < len;) {
-            char *s_ = tu_step_input(s + i, len - i, inputs + n);
+            tu_input_arr_stretch(&line->input_buf, line->input_buf.len + 1);
+            char *s_ = tu_step_input(s + i, len - i, line->input_buf.p + line->input_buf.len);
             if(s_ == NULL) break;
+            line->input_buf.len ++;
 //            DEBUG("input len: %i\n", inputs[n].len);
 //            DEBUG("input type: %i\n", inputs[n].type);
 //            DEBUG("input key: %X\n", inputs[n].key);
-            n ++;
             i = s_ - s;
         }
         int _cursor = line->cursor;
-        int lowest_change = tl_process_input(line, inputs, n, first_run);
+        int lowest_change = tl_process_input(line, first_run);
         first_run = false;
-        free(inputs);
         memmove(s, s + i, len - i);
         t->input_buf.len -= i;
         if(lowest_change < 0) {
