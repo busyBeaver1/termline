@@ -1636,7 +1636,7 @@ void tu_utf8_cp_boundary(char *s, int len, int at, int *begin, int *end, int *wi
 void tu_item_boundary(char *s, int len, int at, int *begin, int *end, int *width) {
     // testing for (\e\[|\x9B|\xC2\x9B)[0-9;]*m
     int csi_test = -1; // after or right on the CSI end, strictly before 'm'
-    if(s[at] == ']' || '0' <= s[at] && s[at] <= '9' || s[at] == ';') csi_test = at;
+    if(s[at] == '[' || '0' <= s[at] && s[at] <= '9' || s[at] == ';') csi_test = at;
     if(s[at] == 'm') csi_test = at - 1;
     if(s[at] == '\33' || s[at] == '\233') csi_test = at + 1;
     if(s[at] == '\302') csi_test = at + 2;
